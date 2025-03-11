@@ -1,21 +1,22 @@
-from typing import Optional, Literal, overload
+from typing import Optional, Literal, Sequence, overload
 from warnings import warn
 
 import numpy as np
 import pandas as pd
+import pandas.api.typing
 import scanpy as sc
 
 import scipy.sparse
 
 
 @overload
-def get_expr_matrix(adata: sc.AnnData, genes: list[str], *, layer: Optional[str] = None, ret_type: Literal['pandas'], copy: bool = True) -> pd.DataFrame: ...
+def get_expr_matrix(adata: sc.AnnData, genes: Sequence[str], *, layer: Optional[str] = None, ret_type: Literal['pandas'], copy: bool = True) -> pd.DataFrame: ...
 @overload
-def get_expr_matrix(adata: sc.AnnData, genes: list[str], *, layer: Optional[str] = None, ret_type: Literal['numpy'], copy: bool = True) -> np.ndarray: ...
+def get_expr_matrix(adata: sc.AnnData, genes: Sequence[str], *, layer: Optional[str] = None, ret_type: Literal['numpy'], copy: bool = True) -> np.ndarray: ...
 
 def get_expr_matrix(
         adata: sc.AnnData,
-        genes: list[str],
+        genes: Sequence[str],
         *,
         layer: Optional[str] = None,
         ret_type: Literal['pandas', 'numpy'] = 'numpy',
@@ -58,3 +59,21 @@ def get_expr_matrix(
         )
     elif ret_type == 'numpy':
         return arr
+
+
+def get_expr_grouped_by(
+        adata: sc.AnnData,
+        obs_key: str,
+        *,
+        genes: Optional[Sequence[str]] = None,
+        layer: Optional[str] = None,
+    ) -> pandas.api.typing.DataFrameGroupBy:
+    """
+    Returns a pandas GroupBy object on the specified genes and layer in `adata`,
+    with grouping done according to the categorical column name provided in `obs_key`.
+    """
+    if genes is None:
+        genes = adata.var.index.values
+    expr_df: pd.DataFrame = get_expr_matrix(adata, genes, layer=layer, ret_type='pandas')
+    expr_grouped = expr_df.groupby(adata.obs[obs_key])
+    return expr_grouped
