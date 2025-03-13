@@ -74,10 +74,10 @@ def plot_umap_ax(
         cmap: matplotlib.colors.Colormap = plt.get_cmap(cmap)
     if isinstance(cat_cmap, str):
         cat_cmap: matplotlib.colors.Colormap = plt.get_cmap(cat_cmap)
-    if obs_filt is not None and len(obs_filt) != adata.obs:
+    if obs_filt is not None and len(obs_filt) != len(adata.obs):
         raise ValueError("The length of `obs_filt` must match the length of `adata.obs`")
     if isinstance(obs_filt, pd.Series):
-        if not obs_filt.index.equals(adata.obs):
+        if not obs_filt.index.equals(adata.obs.index):
             raise ValueError("When `obs_filt` is a Series, its index must match that of `adata.obs`")
         obs_filt = obs_filt.values
 
