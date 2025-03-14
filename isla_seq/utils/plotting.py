@@ -91,7 +91,7 @@ def plot_umap_ax(
     elif feature in adata.obs.columns:
         # obs column -- must determine whether numeric or categorical
         data = adata.obs[feature]
-        if isinstance(data.dtype, np.number):
+        if pd.api.types.is_numeric_dtype(data.dtype):
             # If numeric, easy; just plot over cmap
             cdata = data
             mapping_type = 'numeric'
