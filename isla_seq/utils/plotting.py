@@ -128,6 +128,9 @@ def plot_umap_ax(
                     cat_colors = [cat_cmap[i % len(cat_cmap)] for i in range(len(cat_unique))]
                 else:
                     cat_colors = cat_cmap(np.linspace(0, 1, len(cat_unique), endpoint=True))
+    else:
+        # Feature does not exist
+        raise ValueError(f"Could not find feature '{feature}' in either `adata.var.index` or `adata.obs.columns`")
 
     # Generate colors!
     if mapping_type == 'numeric':
