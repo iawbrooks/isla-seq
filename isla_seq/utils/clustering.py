@@ -74,6 +74,7 @@ def cluster_recursively(adata: sc.AnnData,
                 resolution=leiden_resolution,
                 restrict_to=('leiden_base', [leiden_base]),
                 key_added='leiden_temp',
+                flavor='leidenalg',
                 random_state=42,
             )
 
