@@ -75,5 +75,18 @@ def get_expr_grouped_by(
     if genes is None:
         genes = adata.var.index.values
     expr_df: pd.DataFrame = get_expr_matrix(adata, genes, layer=layer, ret_type='pandas')
-    expr_grouped = expr_df.groupby(adata.obs[obs_key])
+    expr_grouped = expr_df.groupby(adata.obs[obs_key], observed=True)
     return expr_grouped
+
+
+def sparse_matrix_to_numpy(arr) -> np.ndarray:
+    """
+    Converts scipy sparse matrices to uncompressed numpy format.
+    If a numpy array is passed, simply returns the array.
+    """
+    if isinstance(arr, np.ndarray):
+        return arr
+    if isinstance(arr, (scipy.sparse.csr_matrix, scipy.sparse.csc_matrix)):
+        return arr.toarray()
+    else:
+        raise ValueError(f"Unrecognized type could not be converted from sparse matrix to numpy: '{type(arr)}'")
