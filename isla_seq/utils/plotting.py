@@ -22,7 +22,9 @@ def plot_umap_ax(
         dot_edgewidth: float = 0.1,
         dot_edgecolor = 'k',
         obs_filt: np.ndarray | pd.Series = None,
+        shuffle_rng: Optional[int] = None,
         obsm_key: str = 'X_umap',
+        cat_autotext: bool = False,
 
         beautify: bool = True,
     ):
@@ -60,9 +62,16 @@ def plot_umap_ax(
         Color of the edges of the scatterplot points.
     obs_filt : `numpy.ndarray | pandas.Series`, default: `None`
         Optional filter on the points to plot.
+    shuffle_rng : `int | None`, default: `None`
+        When provided, seeds a random number generator and shuffles the order in which to plot
+        points. Helpful when a dataset is ordered by conditions, and one condition is covering
+        up another as a result.
     obsm_key : `str`, default: `'X_umap'`
         The key in `adata.obsm` from which to obtain the X,Y coordinates of the projection.
         By default, this is scanpy's default key for storing UMAP coordinates.
+    cat_autotext : `bool`, default: `False`
+        When plotting categorical data (e.g. clusters), labels the centroid (mean position)
+        of each category on the plot.
     beautify : `bool`, default: `True`
         Whether to make the plots look a little extra bonita. Adds a title and eliminates
         the X and Y ticks.
@@ -158,6 +167,16 @@ def plot_umap_ax(
         if mapping_type == 'categorical':
             data = data[obs_filt]
 
+    # Optional shuffle
+    if shuffle_rng is not None:
+        rng = np.random.RandomState(shuffle_rng)
+        shuffle_indices = np.arange(len(final_colors), dtype=int)
+        rng.shuffle(shuffle_indices)
+        umap_coord_arr = umap_coord_arr[shuffle_indices]
+        final_colors = final_colors[shuffle_indices]
+        if mapping_type == 'categorical':
+            data = data.iloc[shuffle_indices]
+
     # Plot!
     umap_x, umap_y = umap_coord_arr.T
     ax.scatter(
@@ -168,6 +187,13 @@ def plot_umap_ax(
         s=dot_size
     )
     ax.set_box_aspect(1)
+
+    # Optionally mark categories over the figure
+    if mapping_type == 'categorical' and cat_autotext:
+        for cat_value in cat_unique:
+            cat_filt = data == cat_value
+            centroid_x, centroid_y = umap_coord_arr[cat_filt].mean(axis=0)
+            ax.text(centroid_x, centroid_y, str(cat_value), fontsize=8, fontweight='bold', horizontalalignment='center', verticalalignment='center')
     
     # Create colorbar or legend
     if mapping_type == 'numeric':
