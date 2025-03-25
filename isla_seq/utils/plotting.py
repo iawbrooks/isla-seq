@@ -25,6 +25,7 @@ def plot_umap_ax(
         shuffle_rng: Optional[int] = None,
         obsm_key: str = 'X_umap',
         cat_autotext: bool = False,
+        cat_legend: bool = True,
 
         beautify: bool = True,
     ):
@@ -72,6 +73,8 @@ def plot_umap_ax(
     cat_autotext : `bool`, default: `False`
         When plotting categorical data (e.g. clusters), labels the centroid (mean position)
         of each category on the plot.
+    cat_legend : `bool`, default: `True`
+        When plotting categorical data, specifies whether to plot a legend of categories.
     beautify : `bool`, default: `True`
         Whether to make the plots look a little extra bonita. Adds a title and eliminates
         the X and Y ticks.
@@ -201,7 +204,7 @@ def plot_umap_ax(
         norm = matplotlib.colors.Normalize(vmin=cdata.min(), vmax=cdata.max())
         mappable = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
         plt.colorbar(mappable, cax=cax)
-    elif mapping_type == 'categorical':
+    elif mapping_type == 'categorical' and cat_legend:
         cat_represented_values = data.unique()
         legend_elements = [
             Line2D([0], [0], label=cat_unique[i], linewidth=0, marker='o', markerfacecolor=cat_colors[i], markersize=dot_size+2.0, markeredgewidth=dot_edgewidth, markeredgecolor=dot_edgecolor)
