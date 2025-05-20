@@ -352,15 +352,15 @@ def mutual_nearest_neighbors_transform(
         *,
         mnn_space_1: np.ndarray,
         mnn_space_2: np.ndarray,
-        inq_space_1: np.ndarray,
-        inq_space_2: np.ndarray,
+        inq_space_1: Optional[np.ndarray] = None,
+        inq_space_2: Optional[np.ndarray] = None,
         k: int,
         sigma = 1.0,
         inplace = False,
         concat: bool = False,
         min_mnns: int = 10,
         verbose: bool = False,
-    ) -> tuple[np.ndarray, np.ndarray]:
+    ) -> tuple[np.ndarray, np.ndarray | None]:
     """
     Transforms the datasets `inq_space_2` and `mnn_space_2` to the same spaces as `inq_space_1`
     and `mnn_space_1`, respectively, using the mutual nearest neighbors (MNN) correction algorithm. MNN
@@ -369,8 +369,23 @@ def mutual_nearest_neighbors_transform(
     Expects `mnn_space_1` and `mnn_space_2` to be cosine-normalized. If they are not,
     the `sigma` parameter may need to be adjusted significantly.
     
+    Returns
+    ---
+    The corrected MNN and inquiry spaces, in a tuple. If `concat == True`, these will be the concatenated
+    `_1` and `_2` spaces, otherwise they will just be the corrected `_2` spaces. If no inquiry space was
+    provided, returns None for the corrected inquiry space. 
     """
+    verbose_print = print if verbose else lambda x: None
+    
     # Check parameters
+    inq_space_provided = True
+    if (inq_space_1 is None) != (inq_space_2 is None):
+        raise ValueError("Both or neither of inq_space_1 and inq_space_2 must be provided")
+    if inq_space_1 is None:
+        inq_space_provided = False
+        inq_space_1 = mnn_space_1
+        inq_space_2 = mnn_space_2
+        verbose_print("No inquiry space provided")
     if not 2 == mnn_space_1.ndim == mnn_space_2.ndim == inq_space_1.ndim == inq_space_2.ndim:
         raise ValueError("Input arrays must be 2-dimensional")
     if len(mnn_space_1) != len(inq_space_1):
@@ -383,10 +398,10 @@ def mutual_nearest_neighbors_transform(
         raise ValueError("inq_space_1 and inq_space_2 must have the same number of columns")
     if concat and inplace:
         raise ValueError("`concat` and `inplace` cannot both be True")
-    verbose_print = print if verbose else lambda x: None
 
     # Copy if not inplace
     if not inplace:
+        mnn_space_2 = mnn_space_2.copy()
         inq_space_2 = inq_space_2.copy()
 
     # Obtain MNNs
@@ -420,11 +435,12 @@ def mutual_nearest_neighbors_transform(
         space_1 = mnn_space_1,
         space_2 = mnn_space_2,
     )
-    inq_vectors = _mnn_compute_vectors(
-        mnn_pairs = neigh_pairs,
-        space_1 = inq_space_1,
-        space_2 = inq_space_2,
-    )
+    if inq_space_provided:
+        inq_vectors = _mnn_compute_vectors(
+            mnn_pairs = neigh_pairs,
+            space_1 = inq_space_1,
+            space_2 = inq_space_2,
+        )
 
     # Perform batch correction!
     verbose_print("Computing MNN space batch correction")
@@ -433,20 +449,21 @@ def mutual_nearest_neighbors_transform(
         vectors = mnn_vectors,
         weights = weights,
     )
-    verbose_print("Computing inquiry space batch correction")
-    _mnn_correct_inplace(
-        arr     = inq_space_2,
-        vectors = inq_vectors,
-        weights = weights,
-    )
+    if inq_space_provided:
+        verbose_print("Computing inquiry space batch correction")
+        _mnn_correct_inplace(
+            arr     = inq_space_2,
+            vectors = inq_vectors,
+            weights = weights,
+        )
 
     # Optionally concatenate
     if concat:
         mnn_space_ret = np.concatenate([mnn_space_1, mnn_space_2], axis=0)
-        inq_space_ret = np.concatenate([inq_space_1, inq_space_2], axis=0)
+        inq_space_ret = np.concatenate([inq_space_1, inq_space_2], axis=0) if inq_space_provided else None
     else:
         mnn_space_ret = mnn_space_2
-        inq_space_ret = inq_space_2
+        inq_space_ret = inq_space_2 if inq_space_provided else None
 
     return mnn_space_ret, inq_space_ret
 
@@ -508,7 +525,7 @@ def _mnn_compute_vectors(
         space_2: np.ndarray,
     ):
     _, ncols = space_1.shape
-    vectors = np.zeros(len(mnn_pairs), ncols, dtype=np.float32)
+    vectors = np.zeros((len(mnn_pairs), ncols), dtype=np.float32)
     for i, (idx_1, idx_2) in enumerate(mnn_pairs):
         vectors[i] = space_2[idx_2] - space_1[idx_1]
 
@@ -517,6 +534,7 @@ def _mnn_compute_vectors(
 
 @njit
 def _mnn_correct_inplace(arr: np.ndarray, vectors: np.ndarray, weights: np.ndarray):
+    _, ncols = vectors.shape
     vectors_weighted = np.zeros_like(vectors)
     
     for i in range(len(arr)):
@@ -526,6 +544,6 @@ def _mnn_correct_inplace(arr: np.ndarray, vectors: np.ndarray, weights: np.ndarr
         np.multiply(vectors.T, weights_this_row, vectors_weighted.T)
         
         # to_project[proj_idx] -= vector_differences_weighted.sum(axis=0) / weights_this_row
-        vectors_weighted.sum(axis=0, out=final_correction)
+        final_correction = vectors_weighted.sum(axis=0)
         final_correction *= 1.0 / weights_this_row.sum()
         arr[i] -= final_correction
