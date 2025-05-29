@@ -1,6 +1,7 @@
 import itertools
 import sys
 from typing import Optional, Sequence
+from warnings import warn
 
 import numpy as np
 import pandas as pd
@@ -164,6 +165,8 @@ def mnn_correct_conditions(
         condition_variables: str | Sequence[str],
         k: int,
         sigma: float = 1.0,
+        max_mnns: Optional[int] = None,
+        random_state: int = 42,
         # MNN space
         mnn_genes: Sequence[str],
         mnn_layer: Optional[str] = None,
@@ -196,6 +199,9 @@ def mnn_correct_conditions(
     sigma : `float`, default: 1.0
         Gaussian weighting parameter used when computing weights between each unintegrated cell and
         MNN pairs.
+    max_mnns : `int`, default: `None`
+        Maximum number of mutual nearest neighbor pairs to be used for each batch correction.
+        Setting a limit can drastically improve performance.
     mnn_genes : `Sequence[str]`
         A list of genes (members of `adata.var.index`) upon which to compute MNN pairs.
         Typically, highly variable genes are used.
@@ -242,6 +248,7 @@ def mnn_correct_conditions(
         if isinstance(col.dtype, pd.CategoricalDtype):
             unique_final = [x for x in col.dtype.categories if x in unique_unordered]
         else:
+            warn(f"Condition variable '{variable}' is not categorical and will be batch-corrected in order of appearance!")
             unique_final = unique_unordered
         variable_values.append(unique_final)
         # Generate filters
@@ -298,6 +305,8 @@ def mnn_correct_conditions(
             sigma = sigma,
             inplace = False,
             concat = True,
+            max_mnns = max_mnns,
+            random_state = random_state,
             verbose = verbose,
         )
 
@@ -359,6 +368,8 @@ def mutual_nearest_neighbors_transform(
         inplace = False,
         concat: bool = False,
         min_mnns: int = 10,
+        max_mnns: Optional[int] = None,
+        random_state: int = 42,
         verbose: bool = False,
     ) -> tuple[np.ndarray, np.ndarray | None]:
     """
@@ -416,6 +427,19 @@ def mutual_nearest_neighbors_transform(
     # Ensure some MNNs were found
     if npairs < min_mnns:
         raise ValueError(f"Less than the required number of mutual nearest neighbors were found ({npairs} vs. {min_mnns})")
+    
+    # Optionally downsample to subset of MNNs
+    if max_mnns is not None and npairs > max_mnns:
+        verbose_print("Downsampling MNNs")
+        # Generate random subset of indices into MNN pairs
+        indices = np.arange(npairs)
+        rng = np.random.RandomState(random_state)
+        rng.shuffle(indices)
+        indices = indices[:max_mnns]
+        # Perform actual downsampling
+        neigh_pairs = [neigh_pairs[i] for i in indices]
+        neigh_dists = [neigh_dists[i] for i in indices]
+        npairs = max_mnns
 
     # Compute the weights matrix between each MNN pair cell in `mnn_space_2` (rows)
     # and every other cell in `mnn_space_2` (columns)
