@@ -1,4 +1,4 @@
-from typing import Optional, Literal
+from typing import Literal
 
 import numpy as np
 import pandas as pd
@@ -15,14 +15,15 @@ def plot_umap_ax(
         ax: plt.Axes,
         feature: str,
         *,
-        layer: Optional[str] = None,
+        layer: str | None = None,
         cmap: str | matplotlib.colors.Colormap = 'viridis',
         cat_cmap: str | matplotlib.colors.Colormap | list[str] | None = None,
         dot_size: float = 8.0,
         dot_edgewidth: float = 0.1,
         dot_edgecolor = 'k',
         obs_filt: np.ndarray | pd.Series = None,
-        shuffle_rng: Optional[int] = None,
+        shuffle_rng: int | None = None,
+        sort_numeric: Literal['ascending', 'descending'] | None = None,
         obsm_key: str = 'X_umap',
         cat_autotext: bool = False,
         cat_legend: bool = True,
@@ -66,7 +67,12 @@ def plot_umap_ax(
     shuffle_rng : `int | None`, default: `None`
         When provided, seeds a random number generator and shuffles the order in which to plot
         points. Helpful when a dataset is ordered by conditions, and one condition is covering
-        up another as a result.
+        up another as a result. When data is numeric and `sort_numeric` is not None, this
+        argument is ignored.
+    sort_numeric : `Literal['ascending', 'descending'] | None`, default: `None`
+        When specified AND data is numeric, sorts values ascending or descending before plotting.
+        `'ascending'` means the highest values will be plotted on top; `'descending'` means the
+        lowest values will be plotted on top.
     obsm_key : `str`, default: `'X_umap'`
         The key in `adata.obsm` from which to obtain the X,Y coordinates of the projection.
         By default, this is scanpy's default key for storing UMAP coordinates.
@@ -170,15 +176,21 @@ def plot_umap_ax(
         if mapping_type == 'categorical':
             data = data[obs_filt]
 
-    # Optional shuffle
-    if shuffle_rng is not None:
-        rng = np.random.RandomState(shuffle_rng)
-        shuffle_indices = np.arange(len(final_colors), dtype=int)
-        rng.shuffle(shuffle_indices)
-        umap_coord_arr = umap_coord_arr[shuffle_indices]
-        final_colors = final_colors[shuffle_indices]
+    # Optional shuffle and/or sorting
+    reorder_indices = None
+    if sort_numeric is not None and mapping_type == 'numeric':
+        if sort_numeric == 'ascending':
+            reorder_indices = np.argsort(cdata)
+        elif sort_numeric == 'descending':
+            reorder_indices = np.argsort(cdata)[::-1]
+    elif shuffle_rng is not None:
+        reorder_indices = np.arange(len(final_colors), dtype=int)
+        np.random.RandomState(shuffle_rng).shuffle(reorder_indices)
+    if reorder_indices is not None:
+        umap_coord_arr = umap_coord_arr[reorder_indices]
+        final_colors = final_colors[reorder_indices]
         if mapping_type == 'categorical':
-            data = data.iloc[shuffle_indices]
+            data = data.iloc[reorder_indices]
 
     # Plot!
     umap_x, umap_y = umap_coord_arr.T
@@ -229,6 +241,7 @@ def get_blank_axs_array(
         ax_h: float,
         dpi: int = 200,
         invisible: bool = False,
+        **kwargs,
     ) -> tuple[plt.Figure, np.ndarray]:
     """
     Generate a new figure with an array of empty axes.
@@ -252,6 +265,8 @@ def get_blank_axs_array(
         The resolution of the generated figure.
     invisible : `bool`, default: `False`
         Whether to hide all axes by default, calling `.set_visible(False)` on each one.
+    **kwargs : `dict`
+        Any additional arguments to pass when calling `plt.subplots`
     
     Returns
     ---
@@ -271,7 +286,7 @@ def get_blank_axs_array(
     
     # Create figure
     figsize = (ncols * ax_w, nrows * ax_h)
-    fig, axs = plt.subplots(nrows, ncols, figsize=figsize, dpi=dpi)
+    fig, axs = plt.subplots(nrows, ncols, figsize=figsize, dpi=dpi, **kwargs)
 
     # Adjust ax array to correct size if needed
     if naxs == 1:
@@ -286,3 +301,72 @@ def get_blank_axs_array(
             ax.set_visible(False)
     
     return fig, axs
+
+
+def transform_square_to_circular(
+        x: np.ndarray,
+        y: np.ndarray,
+        center_method: Literal['mean', 'median', 'stretch'] = 'stretch',
+        *,
+        transform_weight: float = 1.0,
+        inplace: bool = False,
+    ) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Converts square coordinates to circular coordinates using an elliptical transform,
+    as described [here](https://squircular.blogspot.com/2015/09/mapping-circle-to-square.html).
+
+    Parameters
+    ---
+    x : `ndarray`
+        The X coordinate array.
+    y : `ndarray`
+        The Y coordinate array.
+    center_method : `Literal['mean', 'median', 'stretch']`, default: `'stretch'`
+        How to center and normalize the data to the unit square.
+        * `'mean'` : centers data around the mean X and Y coordinates; does not change X/Y aspect ratio.
+        * `'median'` : centers data around the median X and Y coordinates; does not change X/Y aspect ratio.
+        * `'stretch'` : stretches data such that it takes up the full range [-1, 1] in both dimensions. May
+          distort X/Y aspect ratio.
+    transform_weight : `float`, default: `1.0`
+        When transforming the data, how much to weight the target coordinate compared to the old
+        coordinate. A weight of 1.0 applies the transform completely; a weight of 0.0 does not
+        alter the input coordinates at all.
+    inplace : `bool`, default: `False`
+        Whether to modify the input arrays in place.
+    """
+    # Check params
+    if not 0 <= transform_weight <= 1.0:
+        raise ValueError("correction_factor must be in the range [0, 1]")
+    if len(x) != len(y):
+        raise ValueError("x and y must have the same length")
+
+    # Ensure data is numpy array
+    xy = np.array([x, y]).T
+
+    # Center & normalize to range [-1, 1] in both dimensions
+    if center_method == 'stretch':
+        xy -= xy.min(axis=0)
+        xy /= xy.max(axis=0) / 2
+        xy -= 1
+    elif center_method == 'mean':
+        xy -= xy.mean(axis=0)
+        xy /= np.abs(xy).max()
+    elif center_method == 'median':
+        xy -= np.median(xy, axis=0)
+        xy /= np.abs(xy).max()
+    else:
+        raise ValueError(f"Invalid center_method: '{center_method}'")
+
+    # Apply final transform
+    x1, y1 = xy.T
+    x1, y1 = (
+        x1 * ((1 - 0.5 * y1**2) ** (transform_weight/2)),
+        y1 * ((1 - 0.5 * x1**2) ** (transform_weight/2)),
+    )
+
+    # Optionally modify in-place
+    if inplace:
+        x[:] = x1
+        y[:] = y1
+
+    return x1, y1
