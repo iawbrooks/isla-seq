@@ -1,4 +1,5 @@
 from typing import Literal, Sequence, Any
+from collections import defaultdict
 
 import numpy as np
 import pandas as pd
@@ -7,6 +8,9 @@ import matplotlib.pyplot as plt
 import matplotlib.colors
 from matplotlib.lines import Line2D
 from matplotlib.patches import Wedge
+from umap import UMAP
+from sklearn.decomposition import PCA
+from sklearn.neighbors import KNeighborsRegressor
 
 from .anndatas import get_expr_matrix
 
@@ -270,6 +274,7 @@ def dotplot_multi(
           maximum value in `vals`.
         * `'row'` : normalize each row independently.
         * `'column'` : normalize each column independently.
+    
     minval : `float | Literal['auto']`, default: `0`
         The minimum value to use when normalizing the values in `vals`.
         If `'auto'`, the minimum value is determined from the data.
@@ -464,6 +469,196 @@ def dotplot_multi(
                 ax.text(col_idx + 0.1, nrows + 0.1, exp_fmt(maxval[col_idx]), rotation=45, ha='right', va='top', fontdict=summary_text_fontdict)
 
     return fig, ax
+
+
+def compute_umap_pretty(
+        adata: sc.AnnData,
+        *,
+        # PCA settings
+        pca_use_rep: str | None = None,
+        n_pcs = 100,
+        bias_vector_key: str = 'log1p_n_genes_by_counts',
+        max_bias_vector_correlation = 0.7,
+        # UMAP settings
+        n_neighbors: int = 25,
+        negative_sample_rate: int = 5,
+        min_dist: float = 0.4,
+        # Downsample settings
+        cluster_key: str = 'leiden',
+        max_cells_per_cluster = 1000,
+        max_cells_total: int = 250000,
+        impute_method: Literal['knn', 'transform'] = 'knn',
+        impute_knn: int = 15,
+        # Filtering settings
+        layer: str | None = 'CPM_log1p',
+        var_filt: str = 'highly_variable',
+        # Miscellaneous
+        random_state: int = 42,
+        verbose: bool = True,
+        key_added: str | None = None,
+    ) -> np.ndarray:
+    """
+    Implements the UMAP computation methodology from [Yao et al., 2023](https://www.nature.com/articles/s41586-023-06812-z),
+    as described in their methods section. Specifically, this function downsamples the dataset in a cluster-aware manner,
+    performs PCA while removing principal components that are highly correlated with a "bias vector" (by default,
+    the log of the number of genes expressed in each cell), computes UMAP on the downsampled data, and then imputes
+    UMAP coordinates for the excluded cells using a KNN regressor.
+
+    This function is significantly faster than computing UMAP directly on all cells, especially for large datasets.
+    Whether the resulting UMAP is "pretty" is left to the user to adjudicate.
+
+    Parameters
+    ---
+    adata : `AnnData`
+        The AnnData object from which to compute the UMAP.
+    pca_use_rep : `str | None`, default: `None`
+        If not `None`, uses the PCA representation stored in `adata.obsm[pca_use_rep]` instead of computing PCA.
+        If `None`, computes PCA on the expression matrix.
+    n_pcs : `int`, default: `100`
+        The number of principal components to use.
+    bias_vector_key : `str`, default: `'log1p_n_genes_by_counts'`
+        The name of a column in `adata.obs` with the "bias vector", defined in Yao et al. 2023 as the log of
+        the number of genes expressed in each cell.
+    max_bias_vector_correlation : `float`, default: `0.7`
+        The maximum absolute correlation between the bias vector and the principal components.
+        Principal components with a correlation greater than this value will be removed.
+    n_neighbors : `int`, default: `25`
+        The number of neighbors to use in UMAP computation.
+    negative_sample_rate : `int`, default: `5`
+        The negative sample rate to use in UMAP computation.
+    min_dist : `float`, default: `0.4`
+        The minimum distance between points in UMAP computation.
+    cluster_key : `str`, default: `'leiden'`
+        The key in `adata.obs` that contains the cluster labels.
+    max_cells_per_cluster : `int`, default: `1000`
+        The maximum number of cells to include from each cluster when computing UMAP.
+    max_cells_total : `int`, default: `250000`
+        The maximum number of cells to include in UMAP computation.
+    impute_method : `Literal['knn', 'transform']`, default: `'knn'`
+        The method to use for imputing UMAP coordinates for excluded cells.
+        * `'knn'` - uses a KNN regressor to predict UMAP coordinates based on the PCA coordinates.
+        * `'transform'` - uses the UMAP transform method to predict UMAP coordinates.
+    
+    impute_knn : `int`, default: `15`
+        The number of nearest neighbors to use for imputing UMAP coordinates when `impute_method` is `'knn'`.
+    layer : `str | None`, default: `'CPM_log1p'`
+        The layer from which to obtain the expression matrix.
+        If `None`, uses `adata.X`. Irrelevant if `pca_use_rep` is not `None`.
+    var_filt : `str`, default: `'highly_variable'`
+        The name of a column in `adata.var` that indicates which genes to use for UMAP computation.
+        Only genes with `adata.var[var_filt]` set to `True` will be used. Irrelevant if `pca_use_rep`
+        is not `None`.
+    random_state : `int`, default: `42`
+        The random state to use for reproducibility. Relevant for downsampling, PCA, and UMAP.
+    verbose : `bool`, default: `True`
+        Whether to print progress messages.
+    key_added : `str | None`, default: `None`
+        If not `None`, the computed UMAP coordinates will be stored in `adata.obsm[key_added]`.
+
+    Returns
+    ---
+    `numpy.ndarray`
+        The computed (and imputed) UMAP coordinates, as a 2D array of shape (n_cells, 2).
+        If `key_added` is not `None`, the UMAP coordinates will also be stored in `adata.obsm[key_added]`.
+    """
+    # Check params
+    vprint = print if verbose else lambda x: None
+
+    # Get expression matrix
+    genes = adata.var.index[adata.var[var_filt]]
+    expr = get_expr_matrix(adata, genes, layer=layer, ret_type='numpy')
+    n_cells_total = len(expr)
+
+    # Downsample, complicatedly
+    vprint("Downsampling...")
+    rng = np.random.RandomState(random_state)
+    ## Cluster downsampling
+    cluster_values = adata.obs[cluster_key].values.copy()
+    indices_all = np.arange(len(cluster_values), dtype=int)
+    rng.shuffle(indices_all)
+    cluster_values = cluster_values[indices_all]
+    indices_by_cluster = defaultdict(list)
+    for idx, clust in zip(indices_all, cluster_values):
+        cluster_idx_list = indices_by_cluster[clust]
+        if len(cluster_idx_list) < max_cells_per_cluster:
+            cluster_idx_list.append(idx)
+    ## Overall downsampling
+    indices_downsampled: np.ndarray = np.r_[*list(indices_by_cluster.values())]
+    indices_downsampled_set = set(indices_downsampled)
+    indices_excluded = np.array([x for x in range(n_cells_total) if x not in indices_downsampled_set])
+    if len(indices_downsampled) > max_cells_total:
+        rng.shuffle(indices_downsampled)
+        indices_downsampled = indices_downsampled[:max_cells_total]
+    np.sort(indices_downsampled)
+    ## Final downsampled array
+    expr_downsampled : np.ndarray = expr[indices_downsampled]
+    expr_excluded    : np.ndarray = expr[indices_excluded]
+    n_cells_downsampled = len(expr_downsampled)
+    vprint(f" -> Downsampled to {n_cells_downsampled}/{n_cells_total} cells")
+
+    # PCA
+    vprint("PCA...")
+    if pca_use_rep is None:
+        pca_fitter = PCA(n_pcs, random_state=random_state)
+        pca = pca_fitter.fit_transform(expr_downsampled) # (n_cells, n_pcs)
+        pca_excluded = pca_fitter.transform(expr_excluded)
+        vprint(" -> PCA computed")
+    else:
+        if verbose and adata.obsm[pca_use_rep].shape[1] < n_pcs:
+            vprint(f" -> \033[31mRepresentation '{pca_use_rep}' has only {adata.obsm[pca_use_rep].shape[1]} "
+                   f"components, but n_pcs = {n_pcs}\033[0m")
+        pca          = adata.obsm[pca_use_rep][indices_downsampled, :n_pcs]
+        pca_excluded = adata.obsm[pca_use_rep][indices_excluded,    :n_pcs]
+        n_pcs = pca.shape[1]
+        vprint(f" -> Using representation '{pca_use_rep}'")
+
+    # Remove biased PCs
+    bias_vector = adata.obs[bias_vector_key].values[indices_downsampled]
+    corr: np.ndarray = np.corrcoef(pca.T, bias_vector)
+    bias_corr = corr[-1, :-1] # last row, all except the last column (only want bias_vector x pca correlation values)
+    pca_indices, = np.where(bias_corr <= max_bias_vector_correlation)
+    pca          = pca         [:, pca_indices]
+    pca_excluded = pca_excluded[:, pca_indices]
+    vprint(f" -> {pca.shape[1]}/{n_pcs} principal components remaining after filtering")
+
+    # UMAP
+    vprint("UMAP...")
+    umap_fitter = UMAP(
+        n_neighbors = n_neighbors,
+        negative_sample_rate = negative_sample_rate,
+        min_dist = min_dist,
+        random_state = random_state,
+    )
+    umap = umap_fitter.fit_transform(pca)
+    vprint(" -> UMAP done")
+
+    # Impute UMAP coordinates if necessary
+    # It may seem silly to not just call umap_fitter.transform(), but imputing coordinates
+    # from nearest neighbors is the methodology used in Yao et al. 2023
+    if n_cells_downsampled < n_cells_total:
+        vprint("Imputing UMAP coordinates")
+        indices_recombined = np.r_[indices_downsampled, indices_excluded]
+        indices_argsort = np.argsort(indices_recombined)
+        if impute_method == 'knn':
+            ## Predict UMAP coordinates based on neighbors in PCA space
+            knn_fitter = KNeighborsRegressor(impute_knn, weights='distance')
+            knn_fitter.fit(pca, umap)
+            umap_excluded = knn_fitter.predict(pca_excluded)
+        elif impute_method == 'transform':
+            ## Transform directly from UMAP object
+            umap_excluded = umap_fitter.transform(pca_excluded)
+        else:
+            raise ValueError(f"Unrecognized impute_method '{impute_method}'")
+        ## Concatenate final coordinates
+        umap_recombined = np.r_[umap, umap_excluded]
+        umap_recombined = umap_recombined[indices_argsort]
+
+
+    # Optionally save result in obsm
+    if key_added is not None:
+        adata.obsm[key_added] = umap_recombined
+
+    return umap_recombined
 
 
 def get_blank_axs_array(
