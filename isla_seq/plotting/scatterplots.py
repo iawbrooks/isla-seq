@@ -1,4 +1,4 @@
-from typing import Literal
+from typing import Literal, Any
 from collections import defaultdict
 
 import numpy as np
@@ -6,24 +6,66 @@ import pandas as pd
 import scanpy as sc
 import matplotlib.pyplot as plt
 from matplotlib.lines import Line2D
+import matplotlib.figure
 import matplotlib.colors
 from sklearn.decomposition import PCA
 from sklearn.neighbors import KNeighborsRegressor
 from umap import UMAP
 
-from ..utils import get_expr_matrix
+from ..utils import get_expr_matrix, CPath
+
+from .utils import get_blank_axs_array
+
+def plot_umaps(
+        adata: sc.AnnData,
+        features: list[str | CPath],
+        *,
+        ncols: int = 4,
+        dpi: float = 200,
+        ax_w: float = 5,
+        ax_h: float = 5,
+        **kwargs
+    ) -> tuple[plt.Figure, np.ndarray]:
+    """
+    Plots a grid of UMAPs, calling plot_umap_ax for each one.
+
+    Parameters
+    ---
+    adata : `scanpy.AnnData`
+        The AnnData from which to plot the projection.
+    features : `str`
+        The names of rows in `adata.var` or columns in `adata.obs`, or ColumnPaths.
+    ncols : `int`, default: 4
+        The number of columns for the generated axes grid.
+    dpi : `float`, default: 200
+        The dots per inch of the generated figure.
+    ax_w : `float`, default: 5
+        The width, in inches, to allocate per axis
+    ax_h : `float`, default: 5
+        The height, in inches, to allocate per axis
+    kwargs:
+        Keyword arguments to pass along to each call of `plot_umap_ax`
+    """
+    fig, axs = get_blank_axs_array(naxs=len(features), ncols=ncols, ax_w=ax_w, ax_h=ax_h, dpi=dpi, invisible=True)
+    for feature, ax in zip(features, axs.flat):
+        ax: plt.Axes
+        ax.set_visible(True)
+        ax.set_aspect(1)
+        plot_umap_ax(adata, ax, feature, **kwargs)
+    
+    return fig, axs
 
 
 def plot_umap_ax(
         adata: sc.AnnData,
         ax: plt.Axes,
-        feature: str | tuple[Literal['var', 'obs'], str] | tuple[Literal['obsm', 'uns'], str, str | int],
+        feature: str | CPath,
         *,
         layer: str | None = None,
         cmap: str | matplotlib.colors.Colormap = 'viridis',
         cat_cmap: str | matplotlib.colors.Colormap | list[str] | None = None,
         dot_size: float = 8.0,
-        dot_edgewidth: float = 0.1,
+        dot_edgewidth: float = 0,
         dot_edgecolor = 'k',
         obs_filt: np.ndarray | pd.Series = None,
         shuffle_rng: int | None = None,
@@ -44,17 +86,7 @@ def plot_umap_ax(
     ax : `matplotlib.pyplot.Axes`
         The `axes` object onto which to plot the projection.
     feature : `str`
-        The name of a row in `adata.var`, or column in `adata.obs`, or a 2- or 3-member tuple
-        indicating precisely which member array of `adata` whose data will be plotted.
-        * If `str`, must be either a row in `adata.var.index` or a column in `adata.obs.columns`.
-          If in both, gene expression data will be prioritized.
-        * If a two-member tuple, the first element must be either `'var'` or `'obs'`, and the second
-          element must be a valid row or column name, respectively. Use this format to disambiguate
-          when a name exists in both `adata.var` and `adata.obs`.
-        * If a three-member tuple, the first element must be either `'obsm'` or `'uns'`, the second
-          element must be a valid key in `adata.obsm` or `adata.uns`, respectively, and the third
-          element must be either an integer indicating the column index in an array, or a string
-          indicating the column name in a DataFrame. Use this format to plot data from `obsm` or `uns`.
+        The name of a row in `adata.var` or column in `adata.obs`, or a ColumnPath.
     layer : `str | None`, default: `None`
         When plotting expression data, the data will be drawn from `adata.layers[layer]` if
         `layer` is not `None`, otherwise expression data will be drawn from `adata.X`.
@@ -112,51 +144,8 @@ def plot_umap_ax(
         obs_filt = obs_filt.values
 
     # Get feature data
-    feature_series: pd.Series = None
-    if isinstance(feature, tuple) and len(feature) == 2:
-        if feature[0] == 'var':
-            if feature[1] not in adata.var.index:
-                raise ValueError(f"Feature '{feature[1]}' not found in `adata.var.index`")
-            feature_series = get_expr_matrix(adata, feature[1], layer=layer, ret_type='pandas')[feature[1]]
-        elif feature[0] == 'obs':
-            if feature[1] not in adata.obs.columns:
-                raise ValueError(f"Feature '{feature[1]}' not found in `adata.obs.columns`")
-            feature_series = adata.obs[feature[1]]
-        else:
-            raise ValueError("When `feature` is a 2-member tuple, the first element must be either 'var' or 'obs'")
-    elif isinstance(feature, tuple) and len(feature) == 3:
-        # Get array keyed by the first two elements of the tuple
-        keyed_array: pd.DataFrame | np.ndarray
-        keyed_array_str = f"adata.{feature[0]}['{feature[1]}']"
-        if feature[0] == 'obsm':
-            if feature[1] not in adata.obsm:
-                raise ValueError(f"Feature '{feature[1]}' not found in `adata.obsm`")
-            keyed_array = adata.obsm[feature[1]]
-        elif feature[0] == 'uns':
-            if feature[1] not in adata.uns:
-                raise ValueError(f"Feature '{feature[1]}' not found in `adata.uns`")
-            keyed_array = adata.uns[feature[1]]
-            if keyed_array.ndim != 2 or keyed_array.shape[0] != len(adata.obs):
-                raise ValueError(f"`adata.uns['{feature[1]}']` must be a 2D array with the same length as `adata.obs`")
-        else:
-            raise ValueError("When `feature` is a 3-member tuple, the first element must be either 'obsm' or 'uns'")
-        
-        # Get column data from the keyed array based on the third element of the tuple
-        if isinstance(feature[2], int):
-            if feature[2] < 0 or feature[2] >= keyed_array.shape[1]:
-                raise ValueError(f"Feature index {feature[2]} is out of bounds for `{keyed_array_str}`")
-            if isinstance(keyed_array, pd.DataFrame):
-                feature_series = keyed_array.iloc[:, feature[2]]
-            else:
-                feature_series = pd.Series(adata.obsm[feature[1]][:, feature[2]], index=adata.obs.index, name=feature[2])
-        elif isinstance(feature[2], str):
-            if not isinstance(keyed_array, pd.DataFrame):
-                raise ValueError(f"When `feature[2]` is a string, `{keyed_array_str}` must be a DataFrame")
-            if feature[2] not in adata.obsm[feature[1]].columns:
-                raise ValueError(f"Feature '{feature[2]}' not found in `{keyed_array_str}`.columns`")
-            feature_series = adata.obsm[feature[1]][feature[2]]
-        else:
-            raise ValueError("When `feature` is a 3-member tuple, the third element must be either an integer or a string")
+    if isinstance(feature, CPath):
+        feature_series = feature.get(adata)
     elif feature in adata.var.index:
         feature_series = get_expr_matrix(adata, feature, layer=layer, ret_type='pandas')[feature]
     elif feature in adata.obs.columns:
