@@ -283,3 +283,15 @@ class ColumnPath():
         return ColumnPath(f"obsm::{key}::{index}")
 
 CPath = ColumnPath
+
+
+def var(name: str, layer: str | None = None) -> CPath:
+    return CPath.var(name=name, layer=layer)
+
+gene = var
+
+def obs(name: str) -> CPath:
+    return CPath.obs(name=name)
+
+def obsm(key: str, index: str) -> CPath:
+    return CPath(key=key, index=index)
