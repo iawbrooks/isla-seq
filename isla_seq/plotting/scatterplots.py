@@ -244,7 +244,7 @@ def plot_umap_ax(
         mappable = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
         plt.colorbar(mappable, cax=cax)
     elif cat_legend:
-        cat_represented_values = [x for x in cat_unique if x in feature_series.unique()]
+        cat_represented_values = [x for x in cat_unique]
         legend_elements = [
             Line2D([0], [0], label=cat_unique[i], linewidth=0, marker='o', markerfacecolor=cat_colors[i], markersize=dot_size+4.0, markeredgewidth=dot_edgewidth, markeredgecolor=dot_edgecolor)
             for i in range(len(cat_unique))
