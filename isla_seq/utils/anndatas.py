@@ -23,7 +23,8 @@ def get_expr_matrix(
         copy: bool = True,
     ) -> np.ndarray | pd.DataFrame:
     """
-    Obtain an expression matrix for the specified genes.
+    Obtain an expression matrix for the specified gene or genes.
+    Returns either a 2D numpy array or a pandas DataFrame depending on `ret_type`.
     """
     if isinstance(genes, str):
         genes = [genes]
@@ -59,6 +60,25 @@ def get_expr_matrix(
         )
     elif ret_type == 'numpy':
         return arr
+
+
+def get_expr_df(
+        adata: sc.AnnData,
+        genes: str | Sequence[str],
+        *,
+        layer: Optional[str] = None,
+        copy: bool = True,
+    ) -> pd.DataFrame:
+    """
+    Obtain a DataFrame of expression for the specified gene or genes.
+    """
+    return get_expr_matrix(
+        adata = adata,
+        genes = genes,
+        layer = layer,
+        ret_type = 'pandas',
+        copy = copy,
+    )
 
 
 def get_expr_grouped_by(
@@ -117,6 +137,32 @@ class ColumnCondition():
 
     def __invert__(self):
         return ColumnCondition(self.lambda_eval, invert = not self.invert)
+    
+    def intersection(*conditions: Self) -> Self:
+        """
+        Obtain a single condition representing the logical AND (intersection) of a list of conditions.
+        """
+        if len(conditions) == 0:
+            raise ValueError("Must provide at least one condition")
+        elif len(conditions) == 1 and isinstance(conditions[0], (list, set)):
+            conditions = tuple(conditions[0])
+        cond = conditions[0]
+        for x in conditions[1:]:
+            cond = cond & x
+        return cond
+    
+    def union(*conditions: Self) -> Self:
+        """
+        Obtain a single condition representing the logical OR (union) of a list of conditions.
+        """
+        if len(conditions) == 0:
+            raise ValueError("Must provide at least one condition")
+        elif len(conditions) == 1 and isinstance(conditions[0], (list, set)):
+            conditions = tuple(conditions[0])
+        cond = conditions[0]
+        for x in conditions[1:]:
+            cond = cond | x
+        return cond
 
     def eval(self, adata: sc.AnnData) -> "pd.Series[bool]":
         """
@@ -137,6 +183,7 @@ class ColumnCondition():
             ret = ret.copy()
         return ret
 
+CCond = ColumnCondition
 
 class ColumnPath():
     resource: Literal['var', 'obs', 'obsm']
