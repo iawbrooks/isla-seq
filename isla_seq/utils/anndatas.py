@@ -341,4 +341,4 @@ def obs(name: str) -> CPath:
     return CPath.obs(name=name)
 
 def obsm(key: str, index: str) -> CPath:
-    return CPath(key=key, index=index)
+    return CPath.obsm(key=key, index=index)
