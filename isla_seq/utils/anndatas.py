@@ -5,8 +5,9 @@ import numpy as np
 import pandas as pd
 import pandas.api.typing
 import scanpy as sc
-
 import scipy.sparse
+
+from .arrays import random_filter
 
 
 @overload
@@ -137,6 +138,25 @@ class ColumnCondition():
 
     def __invert__(self):
         return ColumnCondition(self.lambda_eval, invert = not self.invert)
+
+    def eval(self, adata: sc.AnnData) -> "pd.Series[bool]":
+        """
+        Evaluate the condition on an AnnData object, generating a boolean filter
+        on `adata.obs`.
+        """
+        ret = self.lambda_eval(adata)
+        if self.invert:
+            ret = ~ret
+        return ret
+
+    def subset(self, adata: sc.AnnData, copy: bool = False) -> sc.AnnData:
+        """
+        Get a subset of an AnnData object by filtering for this condition.
+        """
+        ret = adata[self.eval(adata)]
+        if copy:
+            ret = ret.copy()
+        return ret
     
     def intersection(*conditions: Self) -> Self:
         """
@@ -164,26 +184,54 @@ class ColumnCondition():
             cond = cond | x
         return cond
 
-    def eval(self, adata: sc.AnnData) -> "pd.Series[bool]":
-        """
-        Evaluate the condition on an AnnData object, generating a boolean filter
-        on `adata.obs`.
-        """
-        ret = self.lambda_eval(adata)
-        if self.invert:
-            ret = ~ret
-        return ret
+    @property
+    def FALSE() -> Self:
+        return ColumnCondition(lambda adata: pd.Series(False, index=adata.obs.index))
 
-    def subset(self, adata: sc.AnnData, copy: bool = False) -> sc.AnnData:
+    @property
+    def TRUE() -> Self:
+        return ColumnCondition(lambda adata: pd.Series(True, index=adata.obs.index))
+
+    def random(prop: float = 0.5, rng: int | np.random.RandomState | None = None, same: bool = True) -> Self:
         """
-        Get a subset of an AnnData object by filtering for this condition.
+        Sample a random subopulation.
+
+        Parameters
+        ---
+        prop : `float`, between 0 and 1, inclusive
+            The proportion of samples to subset. 
+        rng : `int` | `RandomState` | `None`, default: `None`
+            An integer seed or RandomState object to use for randomly subsetting an AnnData. If a
+            RandomState object is provided, a copy will be made such that the passed object is
+            not modified.
+        same : `bool`, default: `True`
+            Whether to generate the same subset each time the ColumnCondition is used. When True,
+            always produces the exact same pseudorandom sample. Otherwise, repeated calls of `.eval()`
+            or `.subset()` will generate different, but still predictable (according to the `rng`
+            parameter) pseudorandom subsets.
         """
-        ret = adata[self.eval(adata)]
-        if copy:
-            ret = ret.copy()
-        return ret
+        # Create reusable random number generator object
+        if isinstance(rng, np.random.RandomState):
+            state = rng.get_state()
+            rng = np.random.RandomState()
+            rng.set_state(state)
+        else:
+            rng = np.random.RandomState(rng)
+        
+        # Create random filter generator function
+        def rand(adata: sc.AnnData) -> "pd.Series[bool]":
+            if same:
+                use_rng = np.random.RandomState()
+                use_rng.set_state(rng.get_state())
+            else:
+                use_rng = rng
+
+            return pd.Series(random_filter(len(adata), prop, use_rng), index=adata.obs.index)
+
+        return ColumnCondition(rand)
 
 CCond = ColumnCondition
+
 
 class ColumnPath():
     resource: Literal['var', 'obs', 'obsm']
