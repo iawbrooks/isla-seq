@@ -335,31 +335,46 @@ class ColumnPath():
         return ret
     
     def __eq__(self, value: Any) -> ColumnCondition:
-        return ColumnCondition(lambda adata: self.get(adata, copy=False) == value)
+        if isinstance(value, ColumnPath):
+            return ColumnCondition(lambda adata: self.get(adata, copy=False) == value.get(adata, copy=False))
+        else:
+            return ColumnCondition(lambda adata: self.get(adata, copy=False) == value)
     
     def __ne__(self, value: Any) -> ColumnCondition:
-        return ColumnCondition(lambda adata: self.get(adata, copy=False) != value)
+        if isinstance(value, ColumnPath):
+            return ColumnCondition(lambda adata: self.get(adata, copy=False) != value.get(adata, copy=False))
+        else:
+            return ColumnCondition(lambda adata: self.get(adata, copy=False) != value)
     
     def __lt__(self, value: Any) -> ColumnCondition:
-        return ColumnCondition(lambda adata: self.get(adata, copy=False) < value)
+        if isinstance(value, ColumnPath):
+            return ColumnCondition(lambda adata: self.get(adata, copy=False) < value.get(adata, copy=False))
+        else:
+            return ColumnCondition(lambda adata: self.get(adata, copy=False) < value)
     
     def __le__(self, value: Any) -> ColumnCondition:
-        return ColumnCondition(lambda adata: self.get(adata, copy=False) <= value)
+        if isinstance(value, ColumnPath):
+            return ColumnCondition(lambda adata: self.get(adata, copy=False) <= value.get(adata, copy=False))
+        else:
+            return ColumnCondition(lambda adata: self.get(adata, copy=False) <= value)
     
     def __gt__(self, value: Any) -> ColumnCondition:
-        return ColumnCondition(lambda adata: self.get(adata, copy=False) > value)
+        if isinstance(value, ColumnPath):
+            return ColumnCondition(lambda adata: self.get(adata, copy=False) > value.get(adata, copy=False))
+        else:
+            return ColumnCondition(lambda adata: self.get(adata, copy=False) > value)
     
     def __ge__(self, value: Any) -> ColumnCondition:
-        return ColumnCondition(lambda adata: self.get(adata, copy=False) >= value)
+        if isinstance(value, ColumnPath):
+            return ColumnCondition(lambda adata: self.get(adata, copy=False) >= value.get(adata, copy=False))
+        else:
+            return ColumnCondition(lambda adata: self.get(adata, copy=False) >= value)
     
     def bool(self) -> ColumnCondition:
         return ColumnCondition(lambda adata: self.get(adata, copy=False).astype(bool))
     
     def isin(self, values: Iterable) -> ColumnCondition:
-        try:
-            values = values.copy()
-        except AttributeError:
-            raise ValueError("`values` must be copyable with a .copy() method")
+        values = set(values)
         return ColumnCondition(lambda adata: self.get(adata, copy=False).isin(values))
     
     ###########################
