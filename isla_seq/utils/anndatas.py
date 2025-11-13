@@ -1,4 +1,6 @@
-from typing import Optional, Literal, Sequence, Iterable, Any, Callable, Self, overload
+from __future__ import annotations
+
+from typing import Literal, Sequence, Iterable, Any, Callable, overload
 from warnings import warn
 
 import numpy as np
@@ -10,22 +12,42 @@ import scipy.sparse
 from .arrays import random_filter
 
 
+def get_layer(adata: sc.AnnData, layer: str | None) -> sc.anndata.typing.ArrayDataStructureType:
+    return adata.X if layer is None else adata.layers[layer]
+
+
 @overload
-def get_expr_matrix(adata: sc.AnnData, genes: str | Sequence[str], *, layer: Optional[str] = None, ret_type: Literal['pandas'], copy: bool = True) -> pd.DataFrame: ...
+def get_expr_matrix(adata: sc.AnnData, genes: str | Sequence[str], *, layer: str | None = None, ret_type: Literal['pandas'], copy: bool = True) -> pd.DataFrame: ...
 @overload
-def get_expr_matrix(adata: sc.AnnData, genes: str | Sequence[str], *, layer: Optional[str] = None, ret_type: Literal['numpy'], copy: bool = True) -> np.ndarray: ...
+def get_expr_matrix(adata: sc.AnnData, genes: str | Sequence[str], *, layer: str | None = None, ret_type: Literal['numpy'], copy: bool = True) -> np.ndarray: ...
 
 def get_expr_matrix(
         adata: sc.AnnData,
         genes: str | Sequence[str],
         *,
-        layer: Optional[str] = None,
-        ret_type: Literal['pandas', 'numpy'] = 'numpy',
+        layer: str | None = None,
+        ret_type: Literal['numpy', 'np', 'pandas', 'pd'] = 'numpy',
         copy: bool = True,
+        raise_forcecopy: bool = False,
     ) -> np.ndarray | pd.DataFrame:
     """
     Obtain an expression matrix for the specified gene or genes.
-    Returns either a 2D numpy array or a pandas DataFrame depending on `ret_type`.
+
+    Parameters
+    ---
+    adata : `AnnData`
+        The AnnData object from which to obtain expression data.
+    genes : `str | Sequence[str]`
+        A gene or list of genes for which to obtain an expression matrix.
+    layer : `str`, optional
+        The layer key in `adata.layers` to use. Defaults to using `adata.X` if not provided.
+    ret_type : `'numpy' | 'np' | 'pandas' | 'pd'`, default `'numpy'`
+        Whether to return a numpy array (`'np' | 'numpy'`) or pandas DataFrame (`'pd' | 'pandas'`).
+    copy : `bool`, default `True`
+        Whether to copy the data before returning. Will always copy if the underlying array is
+        a scipy sparse array.
+    raise_forcecopy: `bool`, default `False`
+        Whether to raise an error when being forced to copy the underlying data but `copy == False`.
     """
     if isinstance(genes, str):
         genes = [genes]
@@ -39,7 +61,7 @@ def get_expr_matrix(
         gene_indices[i] = gene_index
 
     # Determine source array
-    source_arr = adata.X if layer is None else adata.layers[layer]
+    source_arr = get_layer(adata, layer)
 
     # Slice
     arr = source_arr[:, gene_indices]
@@ -48,30 +70,47 @@ def get_expr_matrix(
 
     # Convert to numpy array
     if isinstance(arr, (scipy.sparse.csr_matrix, scipy.sparse.csc_matrix)):
-        if not copy:
-            warn("copy = False, but a copy must be made because adata.X is a sparse matrix")
+        if raise_forcecopy and not copy:
+            raise ValueError("copy = False, but a copy must be made because the data is stored as a sparse matrix")
         arr = arr.toarray()
 
     # Return depending on `ret_type`
-    if ret_type == 'pandas':
+    if ret_type in ['pd', 'pandas']:
         return pd.DataFrame(
             data=arr,
             columns=genes,
             index=adata.obs.index.values
         )
-    elif ret_type == 'numpy':
+    elif ret_type in ['np', 'numpy']:
         return arr
+    else:
+        raise ValueError(f"Invalid ret_type parameter '{ret_type}'")
 
 
 def get_expr_df(
         adata: sc.AnnData,
         genes: str | Sequence[str],
         *,
-        layer: Optional[str] = None,
+        layer: str | None = None,
         copy: bool = True,
+        raise_forcecopy: bool = False,
     ) -> pd.DataFrame:
     """
     Obtain a DataFrame of expression for the specified gene or genes.
+
+    Parameters
+    ---
+    adata : `AnnData`
+        The AnnData object from which to obtain expression data.
+    genes : `str | Sequence[str]`
+        A gene or list of genes for which to obtain an expression DataFrame.
+    layer : `str`, optional
+        The layer key in `adata.layers` to use. Defaults to using `adata.X` if not provided.
+    copy : `bool`, default `True`
+        Whether to copy the data before returning. Will always copy if the underlying array is
+        a scipy sparse array.
+    raise_forcecopy: `bool`, default `False`
+        Whether to raise an error when `copy == False` but a copy must be made of the underlying data.
     """
     return get_expr_matrix(
         adata = adata,
@@ -79,24 +118,41 @@ def get_expr_df(
         layer = layer,
         ret_type = 'pandas',
         copy = copy,
+        raise_forcecopy = raise_forcecopy,
     )
 
 
 def get_expr_grouped_by(
         adata: sc.AnnData,
-        obs_key: str,
+        groupby: ColumnPath | str,
         *,
-        genes: Optional[Sequence[str]] = None,
-        layer: Optional[str] = None,
+        genes: Sequence[str] | str | None = None,
+        layer: str | None = None,
     ) -> pandas.api.typing.DataFrameGroupBy:
     """
-    Returns a pandas GroupBy object on the specified genes and layer in `adata`,
-    with grouping done according to the categorical column name provided in `obs_key`.
+    Returns a pandas GroupBy object on the specified expression data.
+
+    Parameters
+    ---
+    adata : `AnnData`
+        The AnnData object from which to group expression data.
+    groupby : `ColumnPath | str`
+        Either a ColumnPath indexing a categorical column in `adata`, or the string
+        name of a categorical column in `adata.obs`.
+    genes : `Sequence[str] | str`, optional
+        The gene or genes whose expression to group. Defaults to all genes if not provided.
+    layer : `str`, optional
+        The layer key in `adata.layers` to use. Defaults to using `adata.X` if not provided.
     """
+    # Check params
     if genes is None:
         genes = adata.var.index.values
-    expr_df: pd.DataFrame = get_expr_matrix(adata, genes, layer=layer, ret_type='pandas')
-    expr_grouped = expr_df.groupby(adata.obs[obs_key], observed=True)
+    if isinstance(groupby, str):
+        groupby = ColumnPath.obs(groupby)
+    
+    # Group expression
+    expr_df: pd.DataFrame = get_expr_df(adata, genes, layer=layer)
+    expr_grouped = expr_df.groupby(groupby.get(adata, copy=False), observed=True)
     return expr_grouped
 
 
@@ -126,12 +182,12 @@ class ColumnCondition():
         self.lambda_eval = lambda_eval
         self.invert = invert
 
-    def __and__(self, other: Self):
+    def __and__(self, other: ColumnCondition):
         if not isinstance(other, ColumnCondition):
             raise ValueError(f"Logic operations not permitted between ColumnCondition and {type(other)}")
         return ColumnCondition(lambda adata: self.eval(adata) & other.eval(adata))
 
-    def __or__(self, other: Self):
+    def __or__(self, other: ColumnCondition):
         if not isinstance(other, ColumnCondition):
             raise ValueError(f"Logic operations not permitted between ColumnCondition and {type(other)}")
         return ColumnCondition(lambda adata: self.eval(adata) | other.eval(adata))
@@ -158,7 +214,7 @@ class ColumnCondition():
             ret = ret.copy()
         return ret
     
-    def intersection(*conditions: Self) -> Self:
+    def intersection(*conditions: ColumnCondition) -> ColumnCondition:
         """
         Obtain a single condition representing the logical AND (intersection) of a list of conditions.
         """
@@ -171,7 +227,7 @@ class ColumnCondition():
             cond = cond & x
         return cond
     
-    def union(*conditions: Self) -> Self:
+    def union(*conditions: ColumnCondition) -> ColumnCondition:
         """
         Obtain a single condition representing the logical OR (union) of a list of conditions.
         """
@@ -185,14 +241,14 @@ class ColumnCondition():
         return cond
 
     @property
-    def FALSE() -> Self:
+    def FALSE() -> ColumnCondition:
         return ColumnCondition(lambda adata: pd.Series(False, index=adata.obs.index))
 
     @property
-    def TRUE() -> Self:
+    def TRUE() -> ColumnCondition:
         return ColumnCondition(lambda adata: pd.Series(True, index=adata.obs.index))
 
-    def random(prop: float = 0.5, rng: int | np.random.RandomState | None = None, same: bool = True) -> Self:
+    def random(prop: float = 0.5, rng: int | np.random.RandomState | None = None, same: bool = True) -> ColumnCondition:
         """
         Sample a random subopulation.
 
@@ -230,13 +286,11 @@ class ColumnCondition():
 
         return ColumnCondition(rand)
 
-CCond = ColumnCondition
-
 
 class ColumnPath():
-    resource: Literal['var', 'obs', 'obsm']
-    subpath: tuple[str, ...]
-    layer: str | None
+    _lambda_eval: Callable[[sc.AnnData], pd.Series]
+
+    _NONEPATH = "::NONEPATH::"
 
     def __init__(
             self,
@@ -269,6 +323,10 @@ class ColumnPath():
         cpath = ColumnPath("obs::leiden")
         ```
         """
+        # If NONEPATH was provided, assume everything else will be handled by the wrapping function
+        if path == ColumnPath._NONEPATH:
+            return
+
         # Parse path
         items = tuple(path.split('::'))
         resource = items[0]
@@ -284,49 +342,62 @@ class ColumnPath():
         if layer is not None and resource != 'var':
             raise ValueError("When `layer` is specified, the resource must be 'var'")
         
-        if resource in ['var', 'obs'] and len(subpath) != 1:
-            raise ValueError(
-                "When keying from var or obs, one and only one subpath element must be specified: "
-                "1) A gene name, or 2) an obs column name, respectively"
-            )
-        elif resource == 'obsm' and len(subpath) != 2:
-            raise ValueError(
-                "When keying from obsm, exactly two subpath elements must be specified: "
-                "The key of an array in obsm, and the name or index of the column to be accessed in said array"
-            )
+        # Set the evaluation lambda
+        match resource:
+            case 'var':
+                if len(subpath) != 1:
+                    raise ValueError(
+                        "When keying from var or obs, one and only one subpath element must be specified: "
+                        "1) A gene name, or 2) an obs column name, respectively"
+                    )
+                self._lambda_eval = self._get_var_lambda(gene=subpath[0], layer=layer)
+            case 'obs':
+                if len(subpath) != 1:
+                    raise ValueError(
+                        "When keying from var or obs, one and only one subpath element must be specified: "
+                        "1) A gene name, or 2) an obs column name, respectively"
+                    )
+                self._lambda_eval = self._get_obs_lambda(col=subpath[0])
+            case 'obsm':
+                if len(subpath) != 2:
+                    raise ValueError(
+                        "When keying from obsm, exactly two subpath elements must be specified: "
+                        "The key of an array in obsm, and the name or index of the column to be accessed in said array"
+                    )
+                self._lambda_eval = self._get_obsm_lambda(key=subpath[0], col_idx=subpath[1])
 
-        # Set members
-        self.resource = resource
-        self.subpath = subpath
-        self.layer = layer
+    def _get_var_lambda(self, gene: str, layer: str | None = None):
+        return lambda adata: get_expr_matrix(adata, gene, layer=layer, copy=False, ret_type='pandas')[gene]
 
-    
+    def _get_obs_lambda(self, col: str):
+        return lambda adata: adata.obs[col]
+
+    def _get_obsm_lambda(self, key: str, col_idx: str | int):
+        def get_obsm(adata: sc.AnnData, key: str, col_idx: str | int):
+            arr = adata.obsm[key]
+            if isinstance(arr, pd.DataFrame):
+                return arr[col_idx]
+            elif isinstance(arr, np.ndarray):
+                try:
+                    col_idx = int(col_idx)
+                except ValueError:
+                    raise ValueError(
+                        f"Indexed element, `adata.obsm[{key}]`, is a numpy array, "
+                        f"but the provided column index is not convertible to int: '{col_idx}'"
+                    )
+                return pd.Series(arr[:, col_idx], index=adata.obs.index, copy=False)
+            else:
+                raise ValueError(f"Invalid type of indexed array '{type(arr)}'")
+        return lambda adata: get_obsm(adata, key, col_idx)
+
     def get(self, adata: sc.AnnData, copy: bool = True) -> pd.Series:
         """
-        Get the keyed column from `adata`, optionally copying it.
+        Get the keyed data from `adata`, optionally copying it.
 
         The returned Series will have the same index as `adata.obs`.
         """
         # Get data
-        match self.resource:
-            case 'var':
-                gene = self.subpath[0]
-                ret = get_expr_matrix(adata, gene, layer=self.layer, copy=False, ret_type='pandas')[gene]
-            case 'obs':
-                ret = adata.obs[self.subpath[0]]
-            case 'obsm':
-                arr = adata.obsm[self.subpath[0]]
-                if isinstance(arr, pd.DataFrame):
-                    ret = arr[self.subpath[1]]
-                if isinstance(arr, np.ndarray):
-                    try:
-                        col_idx = int(self.subpath[1])
-                    except ValueError:
-                        raise ValueError(
-                            f"Indexed element, `adata.obsm[{self.subpath[0]}]`, is a numpy array, "
-                            f"but the provided column index is not convertible to int: '{self.subpath[1]}'"
-                        )
-                    ret = pd.Series(arr[:, col_idx], index=adata.obs.index, copy=False)
+        ret = self._lambda_eval(adata)
 
         # Optionally copy
         if copy:
@@ -381,27 +452,36 @@ class ColumnPath():
     ### Static Constructors ###
     ###########################
 
-    def var(name: str, layer: str | None = None) -> Self:
+    def _blank() -> ColumnPath:
+        return ColumnPath(ColumnPath._NONEPATH)
+
+    def var(name: str, layer: str | None = None) -> ColumnPath:
         return ColumnPath(f"var::{name}", layer=layer)
     
     gene = var
 
-    def obs(name: str) -> Self:
+    def obs(name: str) -> ColumnPath:
         return ColumnPath(f"obs::{name}")
     
-    def obsm(key: str, index: str) -> Self:
+    def obsm(key: str, index: str) -> ColumnPath:
         return ColumnPath(f"obsm::{key}::{index}")
+    
+    def sum(genes: list[str] | None = None, layer: str | None = None) -> ColumnPath:
+        cpath: ColumnPath = ColumnPath._blank()
+        if genes is None:
+            cpath._lambda_eval = lambda adata: np.asarray(get_layer(adata, layer).sum(axis=1)).reshape(-1)
+        else:
+            cpath._lambda_eval = lambda adata: get_expr_df(adata, genes, layer=layer, copy=False).sum(axis=1)
+        return cpath
 
-CPath = ColumnPath
 
-
-def var(name: str, layer: str | None = None) -> CPath:
-    return CPath.var(name=name, layer=layer)
+def var(name: str, layer: str | None = None) -> ColumnPath:
+    return ColumnPath.var(name=name, layer=layer)
 
 gene = var
 
-def obs(name: str) -> CPath:
-    return CPath.obs(name=name)
+def obs(name: str) -> ColumnPath:
+    return ColumnPath.obs(name=name)
 
-def obsm(key: str, index: str) -> CPath:
-    return CPath.obsm(key=key, index=index)
+def obsm(key: str, index: str) -> ColumnPath:
+    return ColumnPath.obsm(key=key, index=index)

@@ -12,13 +12,13 @@ from sklearn.decomposition import PCA
 from sklearn.neighbors import KNeighborsRegressor
 from umap import UMAP
 
-from ..utils import get_expr_matrix, CPath
+from ..utils import get_expr_matrix, ColumnPath
 
 from .utils import get_blank_axs_array
 
 def plot_umaps(
         adata: sc.AnnData,
-        features: list[str | CPath],
+        features: list[str | ColumnPath],
         *,
         ncols: int = 4,
         dpi: float = 200,
@@ -59,7 +59,7 @@ def plot_umaps(
 def plot_umap_ax(
         adata: sc.AnnData,
         ax: plt.Axes,
-        feature: str | CPath,
+        feature: str | ColumnPath,
         *,
         layer: str | None = None,
         cmap: str | matplotlib.colors.Colormap = 'viridis',
@@ -144,7 +144,7 @@ def plot_umap_ax(
         obs_filt = obs_filt.values
 
     # Get feature data
-    if isinstance(feature, CPath):
+    if isinstance(feature, ColumnPath):
         feature_series = feature.get(adata)
     elif feature in adata.var.index:
         feature_series = get_expr_matrix(adata, feature, layer=layer, ret_type='pandas')[feature]
