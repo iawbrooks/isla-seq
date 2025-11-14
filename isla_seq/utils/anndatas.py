@@ -17,9 +17,26 @@ def get_layer(adata: sc.AnnData, layer: str | None) -> sc.anndata.typing.ArrayDa
 
 
 @overload
-def get_expr_matrix(adata: sc.AnnData, genes: str | Sequence[str], *, layer: str | None = None, ret_type: Literal['pandas'], copy: bool = True) -> pd.DataFrame: ...
+def get_expr_matrix(
+        adata: sc.AnnData,
+        genes: str | Sequence[str],
+        *,
+        layer: str | None = None,
+        ret_type: Literal['numpy', 'np'] = 'numpy',
+        copy: bool = True,
+        raise_forcecopy: bool = False
+    ) -> np.ndarray: ...
+
 @overload
-def get_expr_matrix(adata: sc.AnnData, genes: str | Sequence[str], *, layer: str | None = None, ret_type: Literal['numpy'], copy: bool = True) -> np.ndarray: ...
+def get_expr_matrix(
+        adata: sc.AnnData,
+        genes: str | Sequence[str],
+        *,
+        layer: str | None = None,
+        ret_type: Literal['pandas', 'pd'],
+        copy: bool = True,
+        raise_forcecopy: bool = False
+    ) -> pd.DataFrame: ...
 
 def get_expr_matrix(
         adata: sc.AnnData,
