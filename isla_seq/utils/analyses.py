@@ -8,11 +8,11 @@ import matplotlib
 import matplotlib.pyplot as plt
 import yaml
 from pydeseq2.ds import DeseqDataSet, DeseqStats
+from sklearn.neighbors import KNeighborsRegressor
 
-from ..internal import resolve_yaml_definitions
+from .. import internal
 
-from .anndatas import get_expr_matrix
-from .anndatas import ColumnCondition, ColumnPath, Literal, get_expr_df
+from .anndatas import ColumnCondition, ColumnPath, Literal, get_expr_df, get_expr_matrix
 
 def compute_coexpression_matrix(
         adata: sc.AnnData,
@@ -50,6 +50,71 @@ def compute_coexpression_matrix(
     ret_mtx = (ret_mtx.T / np.array(gene_sums)).T
 
     return pd.DataFrame(ret_mtx, index=genes, columns=genes)
+
+
+def impute_genes(
+        adata_ref: sc.AnnData,
+        adata_query: sc.AnnData,
+        *,
+        k: int = 5,
+        layer_knn: str | None,
+        layer_impute: str | None,
+        knn_genes: list[str] | None = None,
+        impute_genes: list[str] | None = None,
+        knn_metric: Literal['cosine', 'euclidean'] = 'cosine',
+        knn_weights: Literal['uniform', 'distance'] = 'uniform',
+    ) -> pd.DataFrame:
+    """
+    Compute the nearest-neighbors-predicted expression of genes in a query dataset
+    based off of a reference dataset.
+
+    Parameters
+    ---
+    adata_ref : `AnnData`
+        The reference dataset from which to impute expression,
+    adata_query : `AnnData`
+        The querying dataset for whose cells expression values will be generated.
+    k : `int`, default 5
+        The number of nearest neighbors to compute in the reference dataset for each
+        cell in the query dataset.
+    layer_knn : `str | None`
+        The layer key to use for computing nearest neighbors between the two datasets.
+        If not provided, defaults to using expression data stored in `.X`.
+    layer_impute: `str | None`
+        The layer key to use for imputing expression.
+        If not provided, defaults to using expression data stored in `.X`.
+    knn_genes : `list[str] | None`, default `None`
+        List of genes to use for neighbor computation. Defaults to all shared genes.
+    impute_genes: `list[str] | None`, default `None`
+        List of genes for which to impute expression. Defaults to all genes in `adata_ref`.
+    knn_metric: `Literal['cosine', 'euclidean']`, default `'cosine'`
+        Controls how distances are computed when finding nearest neighbors. Supplied as the
+        `metric` argument in the `sklearn.neighbors.KNeighborsRegressor` constructor.
+    knn_weights: `Literal['uniform', 'distance']`, default `'uniform'`
+        Controls how neighbors are weighted when imputing expression. Supplied as the
+        `weights` argument in the `sklearn.neighbors.KNeighborsRegressor` constructor.
+    """
+    # Check params
+    if knn_genes is None:
+        knn_genes = list(adata_query.var.index.intersection(adata_ref.var.index))
+    if impute_genes is None:
+        impute_genes = list(adata_ref.var.index)
+    
+    # Get necessary expression data
+    arr_ref_impute = get_expr_matrix(adata_ref,   impute_genes, layer=layer_impute, copy=False)
+    arr_ref_knn    = get_expr_matrix(adata_ref,   knn_genes,    layer=layer_knn,    copy=False)
+    arr_query_knn  = get_expr_matrix(adata_query, knn_genes,    layer=layer_knn,    copy=False)
+
+    # Impute!
+    knn = KNeighborsRegressor(k, metric=knn_metric, weights=knn_weights)
+    knn.fit(arr_ref_knn, arr_ref_impute)
+    imputed_arr = knn.predict(arr_query_knn)
+
+    return pd.DataFrame(
+        imputed_arr,
+        index = adata_query.obs.index,
+        columns = impute_genes,
+    )
 
 
 ###############################
@@ -529,7 +594,7 @@ class Diffexp:
                 cfg = yaml.safe_load(f)
         else:
             cfg = yml
-        cfg = resolve_yaml_definitions(cfg, definitions_key=definitions_key)
+        cfg = internal.resolve_yaml_definitions(cfg, definitions_key=definitions_key)
 
         # Ensure unique title names
         titles = set()
