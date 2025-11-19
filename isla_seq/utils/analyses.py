@@ -1,4 +1,6 @@
-from typing import Sequence, Self, Generator
+from __future__ import annotations
+
+from typing import Sequence, Generator
 from pathlib import Path
 
 import numpy as np
@@ -588,7 +590,7 @@ class Diffexp:
             sources: sc.AnnData | list[sc.AnnData],
             definitions_key: str = 'definitions',
             diffexp_key: str = 'diffexp',
-        ) -> Generator[Self, None, None]:
+        ) -> Generator[Diffexp, None, None]:
         if isinstance(yml, (Path, str)):
             with Path(yml).open('rb') as f:
                 cfg = yaml.safe_load(f)

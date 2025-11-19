@@ -12,14 +12,16 @@ from numba import njit
 from . import anndatas, preprocessing
 
 
-def cluster_recursively(adata: sc.AnnData,
-                        *,
-                        n_genes: int,
-                        corr_merge_thresh: float,
-                        leiden_resolution: float,
-                        verbose: bool = True,
-                        logfile = sys.stdout,
-                        ):
+def cluster_recursively(
+        adata: sc.AnnData,
+        *,
+        n_genes: int,
+        batch_key: str | None = None,
+        corr_merge_thresh: float,
+        leiden_resolution: float,
+        verbose: bool = True,
+        logfile = sys.stdout,
+    ) -> pd.DataFrame:
     """
     Recursively subclusters and recombines `adata` using a combination of the Leiden
     clustering algorithm and cluster cross-correlations.
@@ -43,7 +45,7 @@ def cluster_recursively(adata: sc.AnnData,
             print(x, file=logfile)
 
     # Compute HVGs
-    gene_meta = sc.pp.highly_variable_genes(adata, layer='CPM_log1p', n_top_genes=n_genes, flavor='seurat', inplace=False)
+    gene_meta = sc.pp.highly_variable_genes(adata, layer='CPM_log1p', n_top_genes=n_genes, flavor='seurat', inplace=False, batch_key=batch_key)
     gene_meta.set_index(adata.var.index, inplace=True)
     highly_variable_genes = gene_meta.index.values[gene_meta['highly_variable']]
 
@@ -114,8 +116,8 @@ def cluster_recursively(adata: sc.AnnData,
                 # Compute xcorrs
                 subleidens_grouped = anndatas.get_expr_grouped_by(
                     adata = adata_leiden,
+                    groupby = 'leiden_temp',
                     genes = highly_variable_genes,
-                    obs_key = 'leiden_temp',
                     layer = 'CPM_log1p'
                 )
                 subleiden_means = subleidens_grouped.mean()
