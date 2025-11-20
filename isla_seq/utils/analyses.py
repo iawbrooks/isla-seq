@@ -119,6 +119,33 @@ def impute_genes(
     )
 
 
+def compute_correlation_matrix(
+        adata: sc.AnnData,
+        genes: list[str],
+        layer: str | None = None,
+    ) -> pd.DataFrame:
+    """
+    Computes the Pearson correlation among a list of genes.
+
+    Parameters
+    ---
+    adata : `AnnData`
+        The AnnData object from which to obtain expression data.
+    genes : `list[str]`
+        The gene names for which to compute the correlation matrix.
+    layer : `str | None`, optional
+        The layer in `adata.layers` from which to obtain expression.
+    """
+    expr = get_expr_matrix(adata, genes, layer=layer)
+    corr = np.corrcoef(expr.T)
+
+    return pd.DataFrame(
+        data = corr,
+        index = genes,
+        columns = genes,
+    )
+
+
 ###############################
 ### Differential Expression ###
 ###############################
