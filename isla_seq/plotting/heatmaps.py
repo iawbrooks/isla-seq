@@ -3,6 +3,54 @@ from typing import Sequence, Literal, Any
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.patches import Wedge
+import scanpy as sc
+
+from .. import utils as ut
+
+
+def correlation(
+        adata: sc.AnnData,
+        genes: list[str],
+        layer: str | None = None,
+        cmap: Any = 'coolwarm',
+        vmin: float | None = -1,
+        vmax: float | None = 1,
+
+    ) -> tuple[plt.Figure, plt.Axes]:
+    """
+    Plots the Pearson correlation among a list of genes.
+
+    Parameters
+    ---
+    adata : `AnnData`
+        The AnnData object from which to obtain expression data.
+    genes : `list[str]`
+        The gene names for which to compute the correlation matrix.
+    layer : `str | None`, optional
+        The layer in `adata.layers` from which to obtain expression.
+    cmap : `Any`
+        A matplotlib colormap.
+    vmin : `float | None`, default `-1.0`
+        An artificial minimum imposed upon the data when scaling the color map.
+    vmax : `float | None`, default `1.0`
+        An artificial maximum imposed upon the data when scaling the color map.
+    """
+    # Compute correlation
+    corr = ut.compute_correlation_matrix(adata, genes, layer)
+
+    # Plot
+    fig, ax = plt.subplots(1, 1, figsize=(5, 5), dpi=150)
+    cax = ax.inset_axes([1.02, 0, 0.05, 1])
+    im = ax.imshow(corr, vmin=vmin, vmax=vmax, cmap=cmap)
+    plt.colorbar(im, cax)
+
+    # Set tick labels
+    ax.set_xticks(np.arange(len(genes)))
+    ax.set_yticks(np.arange(len(genes)))
+    ax.set_xticklabels(genes, rotation=45, ha='right')
+    ax.set_yticklabels(genes)
+
+    return fig, ax
 
 
 def dotplot_multi(
