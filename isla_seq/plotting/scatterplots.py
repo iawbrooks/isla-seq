@@ -12,7 +12,7 @@ from sklearn.decomposition import PCA
 from sklearn.neighbors import KNeighborsRegressor
 from umap import UMAP
 
-from ..utils import get_expr_matrix, ColumnPath
+from ..utils import get_expr_matrix, ColumnPath, ColumnCondition
 
 from .utils import get_blank_axs_array
 
@@ -516,3 +516,109 @@ def transform_square_to_circular(
         y[:] = y1
 
     return x1, y1
+
+
+def anchor_umap_by_condition(
+        adata: sc.AnnData,
+        obsm_key: str = 'X_umap',
+        *,
+        columns: tuple[int, int] = (0, 1),
+        center_method: Literal['mean', 'median', 'bounds'] = 'mean',
+        left: ColumnCondition | None = None,
+        right: ColumnCondition | None = None,
+        top: ColumnCondition | None = None,
+        bottom: ColumnCondition | None = None,
+        inplace: bool = True,
+    ) -> np.ndarray:
+    """
+    Flip a UMAP or other `.obsm` array such that certain conditions or subsets
+    of cells appear more on one side of the array than the other. Modifies the
+    positions of *all* cells, not just those that meet the specified condition,
+    so all relative distances are maintained.
+
+    For example, to make sure that *Cxcl14*-positive cells appear more on the bottom
+    and left sides of a UMAP, one would write:
+    ```python
+    # Make a condition with which to anchor
+    cond = ColumnPath("var::Cxcl14") > 0
+    
+    anchor_umap_by_condition(adata, left=cond, bottom=cond)
+    ```
+
+    Parameters
+    ---
+    adata : `AnnData`
+        The AnnData object whose UMAP or array to modify.
+    obsm_key : `str`, default `"X_umap"`
+        The key of the array in `adata.obsm` to modify.
+    columns : `tuple[int, int]`, default `(0, 1)`
+        Which columns of the array in `.obsm` to use as the X (horizontal) and Y
+        (vertical) axes when interpreting the `left`, `right`, `top`, `bottom`
+        parameters.
+    center_method : `'mean' | 'median' | 'bounds'`, default `mean`
+        Whether to anchor the cells belonging to a condition according to that
+        condition's mean location, median location, or halfway between its minumum
+        and maximum edges.
+    left : `ColumnCondition | None`, optional
+        Anchor a condition to the left side. Mutually exclusive with `right`.
+    right : `ColumnCondition | None`, optional
+        Anchor a condition to the right side. Mutually exclusive with `left`.
+    top : `ColumnCondition | None`, optional
+        Anchor a condition to the top side. Mutually exclusive with `bottom`.
+    bottom : `ColumnCondition | None`, optional
+        Anchor a condition to the bottom side. Mutually exclusive with `top`.
+    inplace : `bool`, default `True`
+        Whether to modify the specified array in-place. Always returns a 2D
+        numpy array consisting of the two columns specified in `columns`
+        regardless of this parameter.
+    """
+    # Check params
+    if left is not None and right is not None:
+        raise ValueError("Only one of `right` or `left` may be specified")
+    if top is not None and bottom is not None:
+        raise ValueError("Only one of `top` or `bottom` may be specified")
+    umap = adata.obsm[obsm_key]
+    umap = umap[:, columns].copy()
+
+    # Get dataset centers
+    def get_centers(arr: np.ndarray) -> tuple[float, float]:
+        match center_method:
+            case 'mean':
+                centers = np.mean(arr, axis=0)
+            case 'median':
+                centers = np.median(arr, axis=0)
+            case 'bounds':
+                centers = (arr.max(axis=0) + arr.min(axis=0)) / 2.0
+        return tuple(centers)
+    
+    centers = get_centers(umap)
+
+    # Perform left-right adjustment
+    filt_x = None
+    if right is not None:
+        filt_x = ~(right.eval(adata))
+    elif left is not None:
+        filt_x = left.eval(adata)
+    
+    if filt_x is not None:
+        x, _ = get_centers(umap[filt_x])
+        if x > centers[0]:
+            umap[:, 0] *= -1
+    
+    # Perform top-bottom adjustment
+    filt_y = None
+    if top is not None:
+        filt_y = ~(top.eval(adata))
+    elif bottom is not None:
+        filt_y = bottom.eval(adata)
+    
+    if filt_y is not None:
+        _, y = get_centers(umap[filt_y])
+        if y > centers[1]:
+            umap[:, 1] *= -1
+    
+    # Optionally modify inplace
+    if inplace:
+        adata.obsm[obsm_key][:, columns] = umap
+    
+    return umap
