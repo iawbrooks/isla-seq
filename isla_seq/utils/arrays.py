@@ -1,6 +1,20 @@
 import numpy as np
 
 
+def extract_true_regions(arr: np.ndarray) -> np.ndarray:
+    """
+    Returns a 2D numpy array of dimensions N x 2, where N is the number
+    of contiguous True regions in `arr`. Each row in the returned array
+    consists of the start and end indices of one contiguous True region
+    in `arr`. The end index is one *past* the end, so it can be used in
+    constructions such as `range(start, end)` to iterate over just the
+    region of interest.
+    """
+    # Note: code copied from Stack Overflow answer:
+    # https://stackoverflow.com/a/68515035/12027932
+    return np.flatnonzero(np.diff(np.r_[np.bool8(0), arr.view(np.bool8), np.bool8(0)])).reshape(-1, 2)
+
+
 def random_filter(
         n: int, 
         p: float, 
