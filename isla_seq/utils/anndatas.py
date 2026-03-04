@@ -257,12 +257,10 @@ class ColumnCondition():
             cond = cond | x
         return cond
 
-    @property
-    def FALSE() -> ColumnCondition:
+    def false() -> ColumnCondition:
         return ColumnCondition(lambda adata: pd.Series(False, index=adata.obs.index))
-
-    @property
-    def TRUE() -> ColumnCondition:
+    
+    def true() -> ColumnCondition:
         return ColumnCondition(lambda adata: pd.Series(True, index=adata.obs.index))
 
     def random(prop: float = 0.5, rng: int | np.random.RandomState | None = None, same: bool = True) -> ColumnCondition:
@@ -305,6 +303,9 @@ class ColumnCondition():
 
 
 class ColumnPath():
+    path: tuple[str, ...]
+    layer: str | None
+
     _lambda_eval: Callable[[sc.AnnData], pd.Series]
 
     _NONEPATH = "::NONEPATH::"
@@ -342,6 +343,8 @@ class ColumnPath():
         """
         # If NONEPATH was provided, assume everything else will be handled by the wrapping function
         if path == ColumnPath._NONEPATH:
+            self.path = ("",)
+            self.layer = None
             return
 
         # Parse path
@@ -358,6 +361,10 @@ class ColumnPath():
         
         if layer is not None and resource != 'var':
             raise ValueError("When `layer` is specified, the resource must be 'var'")
+        
+        # Set easy member variables
+        self.path = (resource, *subpath)
+        self.layer = layer
         
         # Set the evaluation lambda
         match resource:
