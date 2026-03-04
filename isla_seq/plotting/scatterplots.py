@@ -74,6 +74,11 @@ def plot_umap_ax(
         cat_autotext: bool = False,
         cat_legend: bool = True,
 
+        vmin: float | None = None,
+        vmax: float | None = None,
+        cmap_min: float = 0.0,
+        cmap_max: float = 1.0,
+
         beautify: bool = True,
     ):
     """
@@ -125,6 +130,18 @@ def plot_umap_ax(
         of each category on the plot.
     cat_legend : `bool`, default: `True`
         When plotting categorical data, specifies whether to plot a legend of categories.
+    vmin : `float | None`, default: `None`
+        Sets a minimum cutoff value when plotting numeric data on a colormap.
+        Defaults to the minimum of the data itself.
+    vmax : `float | None`, default: `None`
+        Sets a maximum cutoff value when plotting numeric data on a colormap.
+        Defaults to the maximum of the data itself.
+    cmap_min : `float`, default `0.0`
+        A number in the range [0, 1) that specifies the minimum bound to use from a colormap's
+        linear color space. Default is to use the whole range.
+    cmap_max : `float`, default `1.0`
+        A number in the range (0, 1] that specifies the maximum bound to use from a colormap's
+        linear color space. Default is to use the whole range.
     beautify : `bool`, default: `True`
         Whether to make the plots look a little extra bonita. Adds a title and eliminates
         the X and Y ticks.
@@ -158,8 +175,16 @@ def plot_umap_ax(
     if feature_is_numeric:
         # Numeric: Simply normalize data and use colormap to get colors
         cdata: np.ndarray = feature_series.to_numpy(dtype=float, copy=True)
-        cdata -= cdata.min()
-        cdata /= cdata.max()
+        if vmin is None:
+            vmin = cdata.min()
+        if vmax is None:
+            vmax = cdata.max()
+        cdata -= vmin
+        cdata /= (vmax - vmin)
+        cdata[cdata < 0] = 0
+        cdata[cdata > 1] = 1
+        cdata *= (cmap_max - cmap_min)
+        cdata += cmap_min
         final_colors = cmap(cdata)
     else:
         # Categorical: Determine order of categories
@@ -180,11 +205,11 @@ def plot_umap_ax(
                     cat_cmap = sc.pl.palettes.default_28
                 else:
                     cat_cmap = sc.pl.palettes.default_102
-        elif isinstance(cat_cmap, str):
-            cat_cmap = plt.get_cmap(cat_cmap)
         # Get colors of each category
         if isinstance(cat_cmap, (list, np.ndarray)):
             cat_colors = [cat_cmap[i % len(cat_cmap)] for i in range(len(cat_unique))]
+        elif isinstance(cat_cmap, dict):
+            cat_colors = [cat_cmap[x] for x in cat_unique]
         else:
             cat_colors = cat_cmap(np.linspace(0, 1, len(cat_unique), endpoint=True))
         # Map categorical data to colors
@@ -240,9 +265,18 @@ def plot_umap_ax(
     # Create colorbar or legend
     if feature_is_numeric:
         cax = ax.inset_axes([1.01, 0, 0.05, 1])
-        norm = matplotlib.colors.Normalize(vmin=feature_series.min(), vmax=feature_series.max())
+        norm = matplotlib.colors.Normalize(vmin=vmin, vmax=vmax)
         mappable = plt.cm.ScalarMappable(norm=norm, cmap=cmap)
         plt.colorbar(mappable, cax=cax)
+        # Change colorbar range for cmap_min and cmap_max, but without moving the automatically generated yticks!
+        yticklabels = cax.get_yticklabels()
+        ytick_proportions = (cax.get_yticks() - vmin) / (vmax - vmin)
+        ymin = cmap_min * (vmax - vmin) + vmin
+        ymax = cmap_max * (vmax - vmin) + vmin
+        yticks = ytick_proportions * (ymax - ymin) + ymin
+        cax.set_yticks(yticks)
+        cax.set_yticklabels(yticklabels)
+        cax.set_ylim(ymin, ymax)
     elif cat_legend:
         cat_represented_values = [x for x in cat_unique]
         legend_elements = [
