@@ -9,7 +9,7 @@ import scanpy as sc
 from sklearn.neighbors import NearestNeighbors
 from numba import njit
 
-from . import anndatas, preprocessing
+from . import anndatas, normalization
 
 
 def cluster_recursively(
@@ -278,9 +278,9 @@ def mnn_correct_conditions(
 
     # Optionally cosine normalize
     if mnn_cosine_normalize:
-        mnn_expr_all = preprocessing.get_cosine_normalized(mnn_expr_all)
+        mnn_expr_all = normalization.get_cosine_normalized(mnn_expr_all)
     if inq_cosine_normalize:
-        inq_expr_all = preprocessing.get_cosine_normalized(inq_expr_all)
+        inq_expr_all = normalization.get_cosine_normalized(inq_expr_all)
 
     # Get arrays to batch-correct
     mnn_expr_list = []
