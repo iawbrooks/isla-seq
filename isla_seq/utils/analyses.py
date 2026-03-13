@@ -146,6 +146,72 @@ def compute_correlation_matrix(
     )
 
 
+def get_pseudobulked(
+        adata: sc.AnnData,
+        by_column: str,
+        *,
+        layer: str | None = 'counts',
+        method: Literal['sum', 'mean'] = 'sum',
+        auto_obs: bool = True,
+        auto_layers: bool = True,
+    ) -> sc.AnnData:
+    """
+    Pseudobulk an AnnData object by sample.
+
+    Parameters
+    ---
+    adata : `AnnData`
+        The AnnData object to pseudobulk.
+    by_column : `str`
+        A column in `adata.obs` indicating samples to individually pseudobulk.
+    layer : `str | None`, default `'counts'`
+        Which layer in `adata.layers` to pseudobulk. Counts highly recommended.
+    method : `'sum' | 'mean'`
+        Whether to pseudobulk by summation or averaging within each sample.
+        Most differential expression methods (such as DESeq2) perform better with summation.
+    auto_obs : `bool`, default `True`
+        Whether to automatically infer which columns in `adata.obs` should transfer
+        to the final, pseudobulked DataFrame. Only includes columns whose values are
+        internally consistent within each sample.
+    auto_layers: `bool`, default `True`
+        Whether to automatically add a copy of the pseudobulked `.X` expression matrix
+        to `.layers[layer]` in the returned AnnData.
+    """
+    # Get expression data
+    expr_layer = get_expr_df(adata, genes=adata.var.index, layer=layer)
+    expr_groupby = expr_layer.groupby(adata.obs[by_column])
+    if method == 'sum':
+        expr_final = expr_groupby.sum()
+    elif method == 'mean':
+        expr_final = expr_groupby.mean().round()
+    else:
+        raise ValueError(f"Invalid value for `method`: '{method}'")
+    
+    # Generate obs
+    obs = pd.DataFrame(index=expr_final.index, data={by_column : expr_final.index})
+    
+    # Optionally add all obs columns which are uniform *within* each and every sample
+    if auto_obs:
+        column_filt = (adata.obs.groupby(by_column).nunique() == 1).all()
+        column_list = [x for x in column_filt.index[column_filt] if x != by_column]
+        append_obs = adata.obs.groupby(by_column).first().loc[obs.index, column_list]
+        obs = pd.concat([obs, append_obs], axis=1)
+
+    # Generate AnnData
+    adata_bulked = sc.AnnData(
+        X = expr_final.to_numpy(),
+        obs = obs,
+        var = pd.DataFrame(index=expr_final.columns),
+        uns = {"pseudobulk" : {"by_column" : by_column, "layer" : layer, "method" : method}}
+    )
+
+    # Optionally add layer
+    if auto_layers and layer is not None:
+        adata_bulked.layers[layer] = adata_bulked.X.copy()
+    
+    return adata_bulked
+
+
 ###############################
 ### Differential Expression ###
 ###############################
@@ -615,9 +681,19 @@ class Diffexp:
     def iter_from_yaml(
             yml: Path | str | dict,
             sources: sc.AnnData | list[sc.AnnData],
+            *,
+            pseudobulk_by: str | None = None,
             definitions_key: str = 'definitions',
             diffexp_key: str = 'diffexp',
         ) -> Generator[Diffexp, None, None]:
+        """
+        
+        """
+        # Check params
+        if isinstance(sources, sc.AnnData):
+            sources = [sources]
+
+        # Load yaml
         if isinstance(yml, (Path, str)):
             with Path(yml).open('rb') as f:
                 cfg = yaml.safe_load(f)
@@ -636,15 +712,56 @@ class Diffexp:
 
         # Run!
         for runme in runlist:
+            # Get info from the YAML
             title = runme['title']
-            cond_1 = Diffexp.generate_condition_from_dict(runme['condition_1'])
-            cond_2 = Diffexp.generate_condition_from_dict(runme['condition_2'])
+            cond_1: ColumnCondition = Diffexp.generate_condition_from_dict(runme['condition_1'])
+            cond_2: ColumnCondition = Diffexp.generate_condition_from_dict(runme['condition_2'])
             name_1 = runme.get('name_1', Diffexp.generate_condition_name_from_dict(runme['condition_1']))
             name_2 = runme.get('name_2', Diffexp.generate_condition_name_from_dict(runme['condition_2']))
 
+            # If pseudobulking, group each source separately
+            do_pbulk = pseudobulk_by is not None
+            if do_pbulk:
+                # Ensure mutual exclusivity of conditions within each source
+                for source in sources:
+                    if (cond_1 & cond_2).eval(source).any():
+                        raise ValueError("Conditions are not mutually exclusive!")
+                # Ensure mutual exclusivity of values in `pseudobulk_by` column across sources
+                sample_ids = set()
+                for source in sources:
+                    for sample_id in source.obs[pseudobulk_by].unique():
+                        if sample_id in sample_ids:
+                            raise ValueError(
+                                f"Pseudobulk error: Sample ID '{sample_id}' is found across multiple source AnnDatas; "
+                                "please choose a different pseudobulking metric or concatenate sources if appropriate."
+                            )
+                        else:
+                            sample_ids.add(sample_id)
+                
+                # Subset each AnnData and pseudobulk
+                sources_pbulk = []
+                for source in sources:
+                    for cond, name in zip([cond_1, cond_2], [name_1, name_2]):
+                        source_pbulk = get_pseudobulked(
+                            cond.subset(source), pseudobulk_by,
+                            method='sum', 
+                            layer='counts', 
+                            auto_layers=True, 
+                            auto_obs=True
+                        )
+                        source_pbulk.obs.rename(index = lambda x: f"{name}_{x}", inplace=True) # In case two conditions draw from the same `pseudobulk_by` sample
+                        source_pbulk.obs["__pseudobulk_condition_name"] = name
+                        sources_pbulk.append(source_pbulk)
+                
+                # Redo conditions and rename title
+                cond_1 = ColumnPath("obs::__pseudobulk_condition_name") == name_1
+                cond_2 = ColumnPath("obs::__pseudobulk_condition_name") == name_2
+                title = f"{title}_pseudobulk"
+
+            # Generate final Diffexp object
             diffexp = Diffexp(
                 title = title,
-                sources = sources,
+                sources = sources_pbulk if do_pbulk else sources,
                 condition_1 = cond_1,
                 condition_2 = cond_2,
                 name_1 = name_1,
