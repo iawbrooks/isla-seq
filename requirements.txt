@@ -1,0 +1,8 @@
+pydeseq2
+scanpy
+scikit-learn
+scipy
+matplotlib
+pandas
+numpy
+PyYAML
