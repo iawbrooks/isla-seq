@@ -16,6 +16,80 @@ from .. import internal
 
 from .anndatas import ColumnCondition, ColumnPath, Literal, get_expr_df, get_expr_matrix
 
+
+def run_scrublet_cached(
+        adata: sc.AnnData,
+        cache_dir: Path,
+        sample_id: str,
+        *,
+        scrublet_kwargs: dict,
+        use_cache: bool = True,
+    ):
+    """
+    Runs scrublet on the provided adata and caches the results to a local file.
+
+    Parameters
+    ---
+    adata : `AnnData`
+        The AnnData object to run scrublet on. Expects raw counts in `.X`.
+    cache_dir : `Path`
+        Where to cache the results or load previously cached results. Will
+        attempt to create the directory if it does not exist.
+    sample_id : `str`
+        A unique ID that refers to this AnnData object or set of scrublet
+        results.
+    scrublet_kwargs : `dict`
+        Arguments to pass to `scanpy.pp.scrublet()`.
+    use_cache : `bool`
+        Whether to use previously cached data if it exists and matches the current
+        configuration. Defaults to `True`.
+    """
+    # Check params
+    cache_dir = Path(cache_dir)
+    if not cache_dir.is_dir():
+        try:
+            cache_dir.mkdir(exist_ok=True)
+        except Exception:
+            raise ValueError(f"Cannot create a cache directory at location: '{cache_dir}'")
+
+    # Determine whether existing scrublet data can be loaded and used
+    cfg_fp = cache_dir / "scrublet_config.yaml"
+    scrublet_data_fp = cache_dir / f"scrublet_{sample_id}.csv"
+
+    if cfg_fp.exists() and use_cache:
+        with cfg_fp.open('rt') as f:
+            cfg_saved = yaml.safe_load(f)
+        if cfg_saved != scrublet_kwargs:
+            use_cache = False
+    else:
+        use_cache = False
+    
+    if use_cache:
+        print("Found matching existing configuration!")
+        if scrublet_data_fp.exists():
+            # Existing data found; just add to adata and return
+            scrub_df = pd.read_csv(scrublet_data_fp, index_col=0)
+            adata.uns['scrublet'] = dict()
+            for col in scrub_df.columns:
+                if col in adata.obs:
+                    adata.obs.drop(columns=col, inplace=True)
+                adata.obs[col] = scrub_df[col]
+            return
+        else:
+            # No existing data found
+            print(f" -> No scrublet data found for '{sample_id}' -- recomputing")
+    else:
+        print("No matching existing configuration found; will scrublet on everything from scratch")
+        with cfg_fp.open('wt') as f:
+            yaml.safe_dump(scrublet_kwargs, f)
+    
+    # Run scrublet on adatas that need it
+    print(f"Running scrublet...")
+    sc.pp.scrublet(adata, **scrublet_kwargs, copy=False)
+    scrub_df = adata.obs[['doublet_score', 'predicted_doublet']]
+    scrub_df.to_csv(scrublet_data_fp)
+
+
 def compute_coexpression_matrix(
         adata: sc.AnnData,
         genes: Sequence[str],
