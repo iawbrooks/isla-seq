@@ -4,5 +4,12 @@ scikit-learn
 scipy
 matplotlib
 pandas
+polars
 numpy
 PyYAML
+send2trash
+
+# Sequence files
+biopython
+gffutils
+gtfparse
