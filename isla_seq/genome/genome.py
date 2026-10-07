@@ -3,8 +3,9 @@ import subprocess
 import shutil
 import os
 import json
+import platform
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Iterable
 from collections import defaultdict
 
 import send2trash
@@ -18,6 +19,48 @@ from Bio import SeqIO
 from Bio.SeqRecord import SeqRecord
 from Bio import Entrez
 
+from ..config import PACKAGE_ROOT_DIR
+
+
+#####################################
+### Validate NCBI CLI executables ###
+#####################################
+
+_NCBI_CLI_DIR = PACKAGE_ROOT_DIR / "ncbi-cli"
+_PATH_DATASETS: Path = None
+_PATH_DATAFORMAT: Path = None
+match platform.system():
+    case 'Windows':
+        _PATH_DATASETS   = _NCBI_CLI_DIR / "datasets_win64.exe"
+        _PATH_DATAFORMAT = _NCBI_CLI_DIR / "dataformat_win64.exe"
+    case 'Linux':
+        _PATH_DATASETS   = _NCBI_CLI_DIR / "datasets_linux_amd64"
+        _PATH_DATAFORMAT = _NCBI_CLI_DIR / "dataformat_linux_amd64"
+    case 'Darwin':
+        _PATH_DATASETS   = _NCBI_CLI_DIR / "datasets_mac"
+        _PATH_DATAFORMAT = _NCBI_CLI_DIR / "dataformat_mac"
+    case _:
+        print("WARNING: Operating system incompatible with downloaded NCBI datasets tools!")
+
+# Make files executable
+if _PATH_DATASETS is not None and _PATH_DATASETS.is_file():
+    _PATH_DATASETS.chmod(0o755)
+    CMD_DATASETS = str(_PATH_DATASETS)
+else:
+    print(f"WARNING: Path to NCBI datasets executable not found: {_PATH_DATASETS.as_posix()}")
+    CMD_DATASETS = ""
+
+if _PATH_DATAFORMAT is not None and _PATH_DATAFORMAT.is_file():
+    _PATH_DATAFORMAT.chmod(0o755)
+    CMD_DATAFORMAT = str(_PATH_DATAFORMAT)
+else:
+    print(f"WARNING: Path to NCBI datasets executable not found: {_PATH_DATAFORMAT.as_posix()}")
+    CMD_DATAFORMAT = ""
+
+
+#########################
+### General Utilities ###
+#########################
 
 def _run_command(
         cmd: list[str],
@@ -98,7 +141,7 @@ def download_ncbi_reference_genome(
     # Download dehydrated dataset
     download_filepath = temp_dir / f"NCBI_{organism_file_stem}.zip"
     cmd = [
-        "datasets", "download", "genome",
+        CMD_DATASETS, "download", "genome",
         "taxon",
         taxon_name,
         "--dehydrated", "--reference", "--assembly-source", "refseq", "--include", "cds,rna,protein,gtf,gff3,seq-report",
@@ -147,7 +190,7 @@ def rehydrate_genome(assembly_dir: Path, verbose: bool = True):
     Rehydrates the downloaded reference genome.
     """
     vprint = lambda x: print(x) if verbose else None
-    cmd = ["datasets", "rehydrate", "--directory", str(assembly_dir)]
+    cmd = [CMD_DATASETS, "rehydrate", "--directory", str(assembly_dir)]
     _run_command(cmd, print_cmd=verbose)
     vprint("# Rehydrated!")
 
@@ -186,6 +229,10 @@ def parse_gtf_ncbi(
         gtf, attribute_df
     ], how='horizontal')
 
+
+##############
+### Genome ###
+##############
 
 class Genome():
     """
@@ -548,6 +595,7 @@ class Genome():
             self,
             matches: str | list[str],
             feature_type: str | None = None,
+            source: str | None = None,
             case_sensitive: bool = False,
         ) -> list[str]:
         """
@@ -571,11 +619,36 @@ class Genome():
         """
         if feature_type is not None:
             cmd += f" AND (featuretype = '{feature_type}')"
+        if source is not None:
+            cmd += f"AND (source LIKE '%{source}%')"
 
         # Execute command
         cursor = self.db.execute(cmd)
         results = cursor.fetchall()
         return [x[0] for x in results]
+
+
+    def get_parent_mapping(
+            self,
+            child_ids: list[str],
+            feature_type: str | Iterable[str],
+            multiple_parents_allowed: bool = False,
+            zero_parents_allowed: bool = False,
+        ) -> dict[str, list[str]]:
+        """
+        
+        """
+        ret = defaultdict(list)
+        for child_id in child_ids:
+            parents = [x for x in self.db.parents(child_id, featuretype=feature_type)]
+            if len(parents) == 0 and not zero_parents_allowed:
+                raise ValueError(f"No parents of type '{feature_type}' for id '{child_id}'")
+            if len(parents) > 1 and not multiple_parents_allowed:
+                raise ValueError(f"Multiple parents of type '{feature_type}' for id '{child_id}': {[x.id for x in parents]}")
+
+            for parent in parents:
+                ret[parent.id].append(child_id)
+        return ret
 
 
     def fetch_entrez(
