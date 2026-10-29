@@ -117,6 +117,7 @@ def download_ncbi_reference_genome(
         rehydrate: bool = False,
         if_exists: Literal['overwrite', 'raise', 'ignore'],
         verbose: bool = True,
+        assembly_source: Literal['refseq', 'genbank'] = 'refseq',
     ) -> Path:
     """
     Downloads an NCBI reference genome and returns the path to that genome's root directory.
@@ -144,14 +145,16 @@ def download_ncbi_reference_genome(
         CMD_DATASETS, "download", "genome",
         "taxon",
         taxon_name,
-        "--dehydrated", "--reference", "--assembly-source", "refseq", "--include", "cds,rna,protein,gtf,gff3,seq-report",
+        "--dehydrated", "--reference", "--assembly-source", assembly_source, "--include", "cds,rna,protein,gtf,gff3,seq-report",
         "--filename", str(download_filepath),
     ]
-    _run_command(cmd, print_cmd=verbose)
+    if _run_command(cmd, print_cmd=verbose, print_std=False):
+        raise ValueError("datasets download: command failed")
     
     # Unzip dataset
-    cmd = ["tar", "-xf", str(download_filepath), "-C", str(temp_dir)]
-    _run_command(cmd, print_cmd=verbose)
+    cmd = ["tar", "-xmf", str(download_filepath), "-C", str(temp_dir)]
+    if _run_command(cmd, print_cmd=verbose, print_std=False):
+        raise ValueError("tar: command failed")
 
     # Find name of the downloaded assembly
     json_path = temp_dir / "ncbi_dataset/data/assembly_data_report.jsonl"
@@ -191,7 +194,8 @@ def rehydrate_genome(assembly_dir: Path, verbose: bool = True):
     """
     vprint = lambda x: print(x) if verbose else None
     cmd = [CMD_DATASETS, "rehydrate", "--directory", str(assembly_dir)]
-    _run_command(cmd, print_cmd=verbose)
+    if _run_command(cmd, print_cmd=verbose):
+        raise ValueError("datasets rehydrate: command failed")
     vprint("# Rehydrated!")
 
 
